@@ -44,6 +44,12 @@ export default function App(): React.JSX.Element {
     if (!isConsoleOpen) setHasNewLogs(true);
   }, [isConsoleOpen]);
 
+  // Fungsi untuk sinkronisasi Sidebar secara global
+  const triggerFSRefresh = useCallback(() => {
+    window.dispatchEvent(new CustomEvent('refresh-fs'));
+    addLog("Filesystem Synchronized", "info");
+  }, [addLog]);
+
   const clearLogs = () => {
     setLogs([]);
     setHasNewLogs(false);
@@ -65,9 +71,9 @@ export default function App(): React.JSX.Element {
       addLog("System initialized. Native FS Active.", "info");
     };
     init();
-  }, []);
+  }, [addLog]);
 
-  // 2. ISOLATED CHAT MEMORY
+  // 2. ISOLATED CHAT MEMORY (Persist ke Storage)
   useEffect(() => {
     const loadMessages = async () => {
       const { value } = await Preferences.get({ key: `chat_log_${activeProjectId}` });
@@ -90,38 +96,50 @@ export default function App(): React.JSX.Element {
     }
   }, [activeFilePath]);
 
-  // Fungsi untuk merefresh explorer setelah aksi file
+  // Fungsi refresh manual (tetap ada untuk kompatibilitas)
   const refreshExplorer = async () => {
     const tree = await scanDirectory('root');
     setProjects(prev => [{
       ...prev[0],
       root: { ...prev[0].root, children: tree }
     }]);
+    triggerFSRefresh();
   };
 
   // 4. TOOL EXECUTION CORE
   const executeTool = async (name: string, args: any) => {
     addLog(`Executing: ${name}`, 'ai');
     try {
+      let result = "";
       switch (name) {
         case 'writeFile':
           await writeNativeFile(args.path, args.content);
           addLog(`File saved: ${args.path}`, 'info');
-          await refreshExplorer(); // Refresh sidebar otomatis
-          return `Success: File ${args.path} written.`;
+          result = `Success: File ${args.path} written.`;
+          break;
         case 'readFile':
-          const content = await readNativeFile(args.path);
+          result = await readNativeFile(args.path);
           addLog(`File read: ${args.path}`, 'info');
-          return content;
+          break;
         case 'deleteFile':
           await deleteNativeNode(args.path);
           addLog(`Node deleted: ${args.path}`, 'warn');
-          await refreshExplorer();
-          return `Success: ${args.path} deleted.`;
+          result = `Success: ${args.path} deleted.`;
+          break;
+        case 'listDirectory':
+          const nodes = await scanDirectory(args.path || 'root');
+          result = JSON.stringify(nodes);
+          break;
         default: 
           addLog(`Unknown tool: ${name}`, 'error');
           return "Error: Tool not found.";
       }
+      
+      // Sinkronisasi Sidebar otomatis setiap ada perubahan file
+      if (['writeFile', 'deleteFile'].includes(name)) {
+        triggerFSRefresh();
+      }
+      return result;
     } catch (e: any) {
       addLog(`System Error: ${e.message}`, 'error');
       setIsConsoleOpen(true);
@@ -130,14 +148,13 @@ export default function App(): React.JSX.Element {
   };
 
   const handleToolCall = async (name: string, args: any) => {
-    // Read operations tidak butuh izin manual demi kecepatan
     if (name === 'readFile' || name === 'listDirectory') return await executeTool(name, args);
     return new Promise((resolve) => {
       setPendingToolCall({ name, args, resolve });
     });
   };
 
-  // 5. AI MESSAGE HANDLER
+  // 5. AI MESSAGE HANDLER (STRICT MODEL 3.0 & 2.5)
   const onSendMessage = async (text: string, imageData?: { data: string, mimeType: string }) => {
     if (isProcessing || (!text.trim() && !imageData)) return;
     if (imageData) setLastImageData(imageData);
@@ -153,46 +170,52 @@ export default function App(): React.JSX.Element {
       id: Date.now().toString(), 
       projectId: activeProjectId, 
       role: 'user', 
-      content: text || (imageData ? "[Sent Image]" : ""), 
+      content: text || (imageData ? "[Image Sent]" : ""), 
       timestamp: Date.now() 
     };
 
     const updatedMessages = [...messages, userMsg];
     setMessages(updatedMessages);
+    // Persist Chat Log
+    await Preferences.set({ key: `chat_log_${activeProjectId}`, value: JSON.stringify(updatedMessages) });
+
     setIsProcessing(true);
     addLog(`Initiating Agent Core...`, 'info');
 
+    // DAFTAR MODEL WAJIB SESUAI PERJANJIAN
     const availableModels = ['gemini-3-flash-preview', 'gemini-2.5-flash'];
     let success = false;
 
     for (const modelName of availableModels) {
       if (success) break;
-      for (let i = 0; i < apiKeys.length; i++) {
+      for (const key of apiKeys) {
         try {
           const response = await chatWithAgent(
             updatedMessages, 
             `Kamu DS-AI, IDE Agent. Fokus eksekusi file. Gunakan model ${modelName}.`, 
             handleToolCall, 
-            false, // Request confirmation first
-            apiKeys[i], 
+            false, 
+            key, 
             modelName,
             imageData
           );
 
-          const aiMsg: Message = { 
-            id: (Date.now() + 1).toString(), 
-            projectId: activeProjectId, 
-            role: 'model', 
-            content: response.text, 
-            thought: response.thought, 
-            timestamp: Date.now() 
-          };
-
-          setMessages(prev => [...prev, aiMsg]);
+          setMessages(prev => {
+            const newMsgs = [...prev, { 
+              id: Date.now().toString(), 
+              projectId: activeProjectId, 
+              role: 'model', 
+              content: response.text, 
+              thought: response.thought, 
+              timestamp: Date.now() 
+            }];
+            Preferences.set({ key: `chat_log_${activeProjectId}`, value: JSON.stringify(newMsgs) });
+            return newMsgs;
+          });
           success = true;
           break; 
         } catch (err: any) {
-          addLog(`Model ${modelName} Key #${i+1} failed.`, 'warn');
+          addLog(`Model ${modelName} fail, trying next...`, 'warn');
         }
       }
     }
@@ -205,57 +228,30 @@ export default function App(): React.JSX.Element {
     setPendingToolCall(null);
     
     if (!approved) {
-      addLog(`Action Denied by User`, 'warn');
+      addLog(`Action Denied`, 'warn');
       resolve("Error: User refused the action.");
       return;
     }
 
     setIsProcessing(true);
     const result = await executeTool(name, args);
-    resolve(result); // Teruskan hasil ke geminiService
+    resolve(result); // Teruskan ke geminiService untuk final response loop
 
-    // KRUSIAL: Beritahu AI bahwa tugas sukses agar dia bisa merespon balik
-    try {
-      const { value: rawKeys } = await Preferences.get({ key: 'gemini_api_key' });
-      const firstKey = rawKeys?.split(',')[0].trim() || "";
-      
-      const response = await chatWithAgent(
-        messages, 
-        "Tugas selesai. Berikan konfirmasi singkat.", 
-        handleToolCall, 
-        true, // bypass confirmation
-        firstKey,
-        'gemini-3-flash-preview',
-        lastImageData || undefined
-      );
-
-      if (response.text) {
-        setMessages(prev => [...prev, { 
-          id: Date.now().toString(), 
-          projectId: activeProjectId, 
-          role: 'model', 
-          content: response.text, 
-          timestamp: Date.now() 
-        }]);
-      }
-    } catch (e) {
-      addLog("Auto-confirm failed.", "error");
-    } finally {
-      setIsProcessing(false);
-    }
+    setIsProcessing(false);
   };
 
   return (
     <div className={`fixed inset-0 flex flex-col overflow-hidden pt-[var(--safe-area-top,20px)] ${theme === 'dark' ? 'bg-[#0d1117] text-gray-200' : 'bg-slate-50'}`}>
       
+      {/* MODAL PERMISSION */}
       {pendingToolCall && (
         <div className="fixed inset-0 z-[200] flex items-center justify-center p-6 bg-black/80 backdrop-blur-md">
           <div className="w-full max-w-sm bg-[#161b22] border border-yellow-500/30 rounded-3xl p-8 shadow-2xl">
-            <h3 className="font-black text-xl mb-4 text-yellow-500 text-center">🛡️ PERMISSION</h3>
-            <p className="text-sm opacity-80 mb-6 text-center">AI ingin melakukan: <span className="text-blue-400 font-mono underline">{pendingToolCall.name}</span></p>
+            <h3 className="font-black text-xl mb-4 text-yellow-500 text-center uppercase">🛡️ AI Request</h3>
+            <p className="text-sm opacity-80 mb-6 text-center">Tindakan: <span className="text-blue-400 font-mono underline">{pendingToolCall.name}</span></p>
             <div className="flex gap-4">
-              <button onClick={() => handlePermission(false)} className="flex-1 py-4 rounded-2xl bg-white/5 font-bold">TOLAK</button>
-              <button onClick={() => handlePermission(true)} className="flex-1 py-4 rounded-2xl bg-yellow-600 text-black font-black">IZINKAN</button>
+              <button onClick={() => handlePermission(false)} className="flex-1 py-4 rounded-2xl bg-white/5 font-bold uppercase text-[10px]">Tolak</button>
+              <button onClick={() => handlePermission(true)} className="flex-1 py-4 rounded-2xl bg-yellow-600 text-black font-black uppercase text-[10px]">Izinkan</button>
             </div>
           </div>
         </div>
@@ -290,6 +286,7 @@ export default function App(): React.JSX.Element {
          {activePanel === 'settings' && <Settings theme={theme} onClose={() => setActivePanel('editor')} />}
       </div>
 
+      {/* NAVIGATION BAR */}
       <div className="h-20 flex border-t border-[#30363d] bg-[#0d1117] px-4 pb-safe">
         <NavButton icon="📁" label="Files" active={activePanel === 'explorer'} onClick={() => setActivePanel('explorer')} />
         <NavButton icon="📝" label="Code" active={activePanel === 'editor'} onClick={() => setActivePanel('editor')} />

@@ -24,7 +24,6 @@ const Sidebar: React.FC<SidebarProps> = ({ theme, activeProjectId, activeFilePat
   const [tree, setTree] = useState<FileNode[]>([]);
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set(['root']));
   
-  // State untuk UI Manajemen
   const [activeNode, setActiveNode] = useState<FileNode | null>(null);
   const [showSheet, setShowSheet] = useState(false);
   const [dialog, setDialog] = useState<{show: boolean, type: 'rename' | 'newFile' | 'newFolder', val: string}>({
@@ -33,13 +32,33 @@ const Sidebar: React.FC<SidebarProps> = ({ theme, activeProjectId, activeFilePat
   
   const timerRef = React.useRef<any>(null);
 
+  /**
+   * Mengambil struktur file terbaru dari Native FS
+   */
   const refreshTree = async () => {
-    const nodes = await scanDirectory('root');
-    setTree(nodes);
+    try {
+      const nodes = await scanDirectory('root');
+      setTree(nodes);
+    } catch (e) {
+      console.error("Sidebar Sync Error:", e);
+    }
   };
 
+  /**
+   * SYNC HANDLER:
+   * 1. Refresh saat project berubah.
+   * 2. Listen ke event 'refresh-fs' (dikirim oleh App.tsx saat AI selesai nulis file).
+   */
   useEffect(() => {
     refreshTree();
+
+    const handleRefreshEvent = () => {
+      console.log("FS Event Received: Refreshing Sidebar...");
+      refreshTree();
+    };
+
+    window.addEventListener('refresh-fs', handleRefreshEvent);
+    return () => window.removeEventListener('refresh-fs', handleRefreshEvent);
   }, [activeProjectId]);
 
   const toggleFolder = (path: string) => {
@@ -51,7 +70,6 @@ const Sidebar: React.FC<SidebarProps> = ({ theme, activeProjectId, activeFilePat
     });
   };
 
-  // LONG PRESS LOGIC
   const handleTouchStart = (node: FileNode) => {
     timerRef.current = setTimeout(() => {
       setActiveNode(node);
@@ -67,7 +85,6 @@ const Sidebar: React.FC<SidebarProps> = ({ theme, activeProjectId, activeFilePat
     }
   };
 
-  // CRUD ACTIONS
   const handleDelete = async () => {
     if (activeNode && confirm(`Hapus permanen ${activeNode.name}?`)) {
       await deleteNativeNode(activeNode.path);
@@ -128,24 +145,19 @@ const Sidebar: React.FC<SidebarProps> = ({ theme, activeProjectId, activeFilePat
 
   return (
     <div className={`w-full h-full flex flex-col ${isDark ? 'bg-[#0d1117]' : 'bg-slate-100'}`}>
-      
-      {/* HEADER */}
       <div className="p-6 space-y-4 shrink-0">
         <div className="flex items-center justify-between">
           <span className="text-[10px] font-black uppercase tracking-widest text-blue-500">DS-AI Explorer</span>
-    
-     <button 
-        onClick={() => { 
-       // Jika belum ada file, arahkan ke 'root' sebagai parent
-         const fallbackNode: FileNode = { name: 'root', path: 'root', type: 'folder' };
-         setActiveNode(tree.length > 0 ? tree[0] : fallbackNode); 
-        setDialog({show: true, type: 'newFolder', val: ''}); 
-          }}
-     className="bg-blue-500/10 text-blue-500 px-3 py-1 rounded-full text-[10px] font-bold"
->
-  NEW +
-      </button>
-    
+          <button 
+            onClick={() => { 
+              const fallbackNode: FileNode = { name: 'root', path: 'root', type: 'folder' };
+              setActiveNode(tree.length > 0 ? tree[0] : fallbackNode); 
+              setDialog({show: true, type: 'newFolder', val: ''}); 
+            }}
+            className="bg-blue-500/10 text-blue-500 px-3 py-1 rounded-full text-[10px] font-bold"
+          >
+            NEW +
+          </button>
         </div>
         <button 
           onClick={onDownload}
@@ -162,7 +174,6 @@ const Sidebar: React.FC<SidebarProps> = ({ theme, activeProjectId, activeFilePat
         {renderTree(tree)}
       </div>
 
-      {/* DIALOG INPUT (MODAL TENGAH) */}
       {dialog.show && (
         <div className="fixed inset-0 z-[110] flex items-center justify-center p-6 bg-black/80 backdrop-blur-md">
           <div className="w-full max-w-xs bg-[#161b22] border border-[#30363d] rounded-2xl p-6 shadow-2xl animate-in zoom-in-95">
@@ -183,18 +194,15 @@ const Sidebar: React.FC<SidebarProps> = ({ theme, activeProjectId, activeFilePat
         </div>
       )}
 
-      {/* BOTTOM SHEET */}
       {showSheet && (
         <>
           <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[100]" onClick={() => setShowSheet(false)} />
-          <div className="fixed bottom-0 left-0 right-0 z-[101] bg-[#161b22] border-t border-[#30363d] rounded-t-[2.5rem] p-8 bottom-sheet-active">
+          <div className="fixed bottom-0 left-0 right-0 z-[101] bg-[#161b22] border-t border-[#30363d] rounded-t-[2.5rem] p-8">
             <div className="w-12 h-1.5 bg-gray-700 rounded-full mx-auto mb-8" />
-            
             <div className="mb-6">
               <p className="text-[10px] font-bold text-blue-500 uppercase mb-1">{activeNode?.type}</p>
               <h3 className="text-xl font-bold text-gray-100 truncate">{activeNode?.name}</h3>
             </div>
-            
             <div className="grid grid-cols-1 gap-2">
               {activeNode?.type === 'folder' && (
                 <>
@@ -209,7 +217,6 @@ const Sidebar: React.FC<SidebarProps> = ({ theme, activeProjectId, activeFilePat
         </>
       )}
 
-      {/* FOOTER */}
       <div className="p-4 border-t border-[#30363d] bg-[#0d1117] flex items-center justify-between">
          <div className="flex items-center gap-2 px-2">
             <div className="w-2 h-2 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]"></div>
