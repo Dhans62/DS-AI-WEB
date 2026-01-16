@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { Project, FileNode, Message, Theme, ActivePanel } from './types';
+import { Project, FileNode, Message, Theme, ActivePanel, LogEntry } from './types';
 import Sidebar from './components/Sidebar';
 import Editor from './components/Editor';
 import ChatPanel from './components/ChatPanel';
 import Settings from './components/Settings';
+import Console from './components/Console';
 import { chatWithAgent } from './services/geminiService';
 import { scanDirectory, readNativeFile, writeNativeFile, deleteNativeNode } from './services/fsService';
 
@@ -21,25 +22,46 @@ export default function App(): React.JSX.Element {
   const [activeFilePath, setActiveFilePath] = useState<string | null>(null);
   const [activeFileContent, setActiveFileContent] = useState<string>("");
   
+  // MODUL D: Terminal States
+  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [isConsoleOpen, setIsConsoleOpen] = useState(false);
+  const [hasNewLogs, setHasNewLogs] = useState(false);
+
   // AI Processing States
   const [isProcessing, setIsProcessing] = useState(false);
   const [activeThought, setActiveThought] = useState<string>("");
   const [pendingToolCall, setPendingToolCall] = useState<{name: string, args: any, resolve: (val: any) => void} | null>(null);
 
-  // 1. INITIAL LOAD: Ambil tema & proyek
+  // MODUL D: Logger Function
+  const addLog = useCallback((message: string, type: LogEntry['type'] = 'info') => {
+    setLogs(prev => [...prev, {
+      id: Date.now().toString(),
+      message,
+      type,
+      timestamp: Date.now()
+    }]);
+    if (!isConsoleOpen) setHasNewLogs(true);
+  }, [isConsoleOpen]);
+
+  const clearLogs = () => {
+    setLogs([]);
+    setHasNewLogs(false);
+  };
+
+  // 1. INITIAL LOAD
   useEffect(() => {
     const init = async () => {
       const { value: t } = await Preferences.get({ key: 'ds-ai-theme' });
       if (t) setTheme(t as Theme);
       
-      // Sync File System Native ke UI
       const tree = await scanDirectory('root');
       setProjects([{ id: 'root', name: 'Main Workspace', createdAt: Date.now(), root: { name: 'root', path: 'root', type: 'folder', children: tree } }]);
+      addLog("System initialized. Native FS Active.", "info");
     };
     init();
   }, []);
 
-  // 2. ISOLATED CHAT MEMORY: Load chat setiap kali ganti proyek
+  // 2. ISOLATED CHAT MEMORY
   useEffect(() => {
     const loadMessages = async () => {
       const { value } = await Preferences.get({ key: `chat_log_${activeProjectId}` });
@@ -48,14 +70,13 @@ export default function App(): React.JSX.Element {
     loadMessages();
   }, [activeProjectId]);
 
-  // 3. FILE SYNC: Ambil isi file saat diklik di sidebar
+  // 3. FILE SYNC
   useEffect(() => {
     if (activeFilePath) {
       readNativeFile(activeFilePath).then(setActiveFileContent);
     }
   }, [activeFilePath]);
 
-  // Handler: Update Konten File
   const handleEditorChange = useCallback(async (content: string) => {
     if (activeFilePath) {
       setActiveFileContent(content);
@@ -63,34 +84,38 @@ export default function App(): React.JSX.Element {
     }
   }, [activeFilePath]);
 
-  // AI TOOL EXECUTION (Modul A Integration)
   const executeTool = async (name: string, args: any) => {
-    switch (name) {
-      case 'writeFile':
-        await writeNativeFile(args.path, args.content);
-        return `Success: File ${args.path} updated.`;
-      case 'readFile':
-        const content = await readNativeFile(args.path);
-        return content;
-      case 'deleteFile':
-        await deleteNativeNode(args.path);
-        return `Success: ${args.path} deleted.`;
-      default: return "Error: Tool not found.";
+    addLog(`Running ${name}...`, 'ai');
+    try {
+      switch (name) {
+        case 'writeFile':
+          await writeNativeFile(args.path, args.content);
+          addLog(`Success write: ${args.path}`, 'info');
+          return `Success: File ${args.path} updated.`;
+        case 'readFile':
+          const content = await readNativeFile(args.path);
+          addLog(`Success read: ${args.path}`, 'info');
+          return content;
+        case 'deleteFile':
+          await deleteNativeNode(args.path);
+          addLog(`Deleted: ${args.path}`, 'warn');
+          return `Success: ${args.path} deleted.`;
+        default: 
+          addLog(`Unknown tool: ${name}`, 'error');
+          return "Error: Tool not found.";
+      }
+    } catch (e: any) {
+      addLog(`Tool Error: ${e.message}`, 'error');
+      setIsConsoleOpen(true);
+      return `Error: ${e.message}`;
     }
   };
 
   const handleToolCall = async (name: string, args: any) => {
-    // Read & List tidak butuh izin (Read-only)
     if (name === 'readFile' || name === 'listDirectory') return await executeTool(name, args);
-    // Write & Delete butuh izin
     return new Promise((resolve) => {
       setPendingToolCall({ name, args, resolve });
     });
-  };
-
-  // FUNGSI ARSITEK: Ringkasan Denah Proyek (Tree-Only)
-  const getProjectDenah = (nodes: FileNode[], indent = ""): string => {
-    return nodes.map(n => `${indent}${n.type === 'folder' ? '📁' : '📄'} ${n.name}`).join('\n');
   };
 
   const onSendMessage = async (text: string) => {
@@ -104,34 +129,19 @@ export default function App(): React.JSX.Element {
     const updatedMessages = [...messages, userMsg];
     setMessages(updatedMessages);
     setIsProcessing(true);
+    addLog(`User message sent.`, 'info');
 
     try {
-      // INJEKSI KONTEKS STRATEGIS
       const tree = await scanDirectory('root');
-      const denah = getProjectDenah(tree);
-      const systemPrompt = `Kamu DS-AI, IDE Agent Berintegritas. 
-      DENAH PROYEK:\n${denah}\n
-      FILE AKTIF: ${activeFilePath || 'None'}\n
-      Tugas: Bantu user mengelola file secara strategis.`;
-
+      const systemPrompt = `Kamu DS-AI, IDE Agent Berintegritas. Tugas: Bantu user mengelola file secara strategis.`;
       const response = await chatWithAgent(updatedMessages, systemPrompt, handleToolCall, false, userApiKey);
-
-      const aiMsg: Message = { 
-        id: (Date.now() + 1).toString(), 
-        projectId: activeProjectId,
-        role: 'model', 
-        content: response.text, 
-        thought: response.thought,
-        timestamp: Date.now() 
-      };
-
+      const aiMsg: Message = { id: (Date.now() + 1).toString(), projectId: activeProjectId, role: 'model', content: response.text, thought: response.thought, timestamp: Date.now() };
       const finalMessages = [...updatedMessages, aiMsg];
       setMessages(finalMessages);
       await Preferences.set({ key: `chat_log_${activeProjectId}`, value: JSON.stringify(finalMessages) });
-      
-      if (response.thought) setActiveThought(response.thought);
     } catch (err: any) {
-      alert("AI Error: " + err.message);
+      addLog(`AI Error: ${err.message}`, 'error');
+      setIsConsoleOpen(true);
     } finally {
       setIsProcessing(false);
     }
@@ -141,19 +151,21 @@ export default function App(): React.JSX.Element {
     if (!pendingToolCall) return;
     const { name, args, resolve } = pendingToolCall;
     setPendingToolCall(null);
+    if (!approved) addLog(`Denied: ${name}`, 'warn');
     const result = approved ? await executeTool(name, args) : "Error: Denied by user.";
     resolve(result);
   };
 
   return (
-    <div className={`fixed inset-0 flex flex-col overflow-hidden ${theme === 'dark' ? 'bg-[#0d1117] text-gray-200' : 'bg-slate-50'}`}>
+    // Tambah pt-[env(safe-area-inset-top)] agar tidak tertutup Status Bar HP
+    <div className={`fixed inset-0 flex flex-col overflow-hidden pt-[var(--safe-area-top,20px)] ${theme === 'dark' ? 'bg-[#0d1117] text-gray-200' : 'bg-slate-50'}`}>
       
       {/* SECURITY MODAL */}
       {pendingToolCall && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/80 backdrop-blur-md">
+        <div className="fixed inset-0 z-[200] flex items-center justify-center p-6 bg-black/80 backdrop-blur-md">
           <div className="w-full max-w-sm bg-[#161b22] border border-yellow-500/30 rounded-3xl p-8 shadow-2xl">
-            <h3 className="font-black text-xl mb-4 text-yellow-500">🛡️ PERMISSION</h3>
-            <p className="text-sm opacity-80 mb-6 leading-relaxed">AI meminta izin eksekusi: <span className="text-blue-400 font-mono font-bold">{pendingToolCall.name}</span> pada path <span className="text-white italic">{pendingToolCall.args.path}</span></p>
+            <h3 className="font-black text-xl mb-4 text-yellow-500 text-center">🛡️ PERMISSION</h3>
+            <p className="text-sm opacity-80 mb-6 text-center">AI meminta izin: <span className="text-blue-400 font-mono underline">{pendingToolCall.name}</span></p>
             <div className="flex gap-4">
               <button onClick={() => handlePermission(false)} className="flex-1 py-4 rounded-2xl bg-white/5 font-bold">TOLAK</button>
               <button onClick={() => handlePermission(true)} className="flex-1 py-4 rounded-2xl bg-yellow-600 text-black font-black">IZINKAN</button>
@@ -163,7 +175,7 @@ export default function App(): React.JSX.Element {
       )}
 
       {/* MAIN VIEWPORT */}
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex overflow-hidden relative">
          {activePanel === 'explorer' && (
            <Sidebar 
              theme={theme} projects={projects} setProjects={setProjects} 
@@ -173,20 +185,29 @@ export default function App(): React.JSX.Element {
            />
          )}
          
-         <div className={`flex-1 ${activePanel === 'editor' ? 'flex' : 'hidden'}`}>
+         {/* EDITOR & CONSOLE LAYER */}
+         <div className={`flex-1 relative ${activePanel === 'editor' ? 'block' : 'hidden'}`}>
             <Editor 
               theme={theme} 
               file={activeFilePath ? { path: activeFilePath, content: activeFileContent } : null} 
               onChange={handleEditorChange} 
+              isConsoleOpen={isConsoleOpen}
+              toggleConsole={() => {
+                setIsConsoleOpen(!isConsoleOpen);
+                setHasNewLogs(false);
+              }}
+              hasNewLogs={hasNewLogs}
+            />
+            {/* Console harus di dalam container yang sama dengan Editor & punya Z-index tinggi */}
+            <Console 
+              logs={logs} 
+              onClear={clearLogs} 
+              isOpen={isConsoleOpen} 
             />
          </div>
 
          <div className={`flex-1 ${activePanel === 'chat' ? 'flex' : 'hidden'}`}>
-            <ChatPanel 
-              theme={theme} messages={messages} 
-              onSendMessage={onSendMessage} isProcessing={isProcessing} 
-              activeThought={activeThought}
-            />
+            <ChatPanel theme={theme} messages={messages} onSendMessage={onSendMessage} isProcessing={isProcessing} activeThought={activeThought} />
          </div>
 
          {activePanel === 'settings' && <Settings theme={theme} onClose={() => setActivePanel('editor')} />}

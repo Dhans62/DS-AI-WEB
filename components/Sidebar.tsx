@@ -133,12 +133,19 @@ const Sidebar: React.FC<SidebarProps> = ({ theme, activeProjectId, activeFilePat
       <div className="p-6 space-y-4 shrink-0">
         <div className="flex items-center justify-between">
           <span className="text-[10px] font-black uppercase tracking-widest text-blue-500">DS-AI Explorer</span>
-          <button 
-            onClick={() => { setActiveNode(tree[0]); setDialog({show: true, type: 'newFolder', val: ''}); }}
-            className="bg-blue-500/10 text-blue-500 px-3 py-1 rounded-full text-[10px] font-bold"
-          >
-            NEW +
-          </button>
+    
+     <button 
+        onClick={() => { 
+       // Jika belum ada file, arahkan ke 'root' sebagai parent
+         const fallbackNode: FileNode = { name: 'root', path: 'root', type: 'folder' };
+         setActiveNode(tree.length > 0 ? tree[0] : fallbackNode); 
+        setDialog({show: true, type: 'newFolder', val: ''}); 
+          }}
+     className="bg-blue-500/10 text-blue-500 px-3 py-1 rounded-full text-[10px] font-bold"
+>
+  NEW +
+      </button>
+    
         </div>
         <button 
           onClick={onDownload}
