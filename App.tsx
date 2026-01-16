@@ -6,6 +6,10 @@ import ChatPanel from './components/ChatPanel';
 import Settings from './components/Settings';
 import { chatWithAgent } from './services/geminiService';
 
+// IMPORT BARU UNTUK NATIVE APK
+import { Preferences } from '@capacitor/preferences';
+import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
+
 const DEFAULT_PROJECTS: Project[] = [
   {
     id: 'p1',
@@ -13,12 +17,12 @@ const DEFAULT_PROJECTS: Project[] = [
     createdAt: Date.now(),
     root: {
       name: 'root',
-      path: '/',
+      path: 'root', // Diperbaiki: Jangan pakai '/' di awal untuk path Capacitor
       type: 'folder',
       isExpanded: true,
       children: [
-        { name: 'app.js', path: '/app.js', type: 'file', content: '// Bangun masa depan di sini\nconsole.log("DS-AI Online");' },
-        { name: 'README.md', path: '/README.md', type: 'file', content: '# DS-AI Mobile IDE\n\nAI ini akan meminta izin sebelum mengubah file Anda.' }
+        { name: 'app.js', path: 'root/app.js', type: 'file', content: '// Bangun masa depan di sini\nconsole.log("DS-AI Online");' },
+        { name: 'README.md', path: 'root/README.md', type: 'file', content: '# DS-AI Mobile IDE\n\nAI ini akan meminta izin sebelum mengubah file Anda.' }
       ]
     }
   }
@@ -39,10 +43,7 @@ export default function App(): React.JSX.Element {
   });
   const [activeFilePath, setActiveFilePath] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
-  
-  // TAMBAHAN: State untuk menangkap pikiran Gemini 3
   const [activeThought, setActiveThought] = useState<string>("");
-
   const [pendingToolCall, setPendingToolCall] = useState<{name: string, args: any, resolve: (val: any) => void} | null>(null);
 
   const activeProject = useMemo(() => projects.find(p => p.id === activeProjectId) || projects[0], [projects, activeProjectId]);
@@ -54,6 +55,21 @@ export default function App(): React.JSX.Element {
     localStorage.setItem('ds-ai-messages', JSON.stringify(messagesByProject));
     localStorage.setItem('ds-ai-theme', theme);
   }, [projects, activeProjectId, messagesByProject, theme]);
+
+  // FUNGSI NATIVE: Tulis ke Storage HP
+  const saveToNativeFileSystem = async (path: string, content: string) => {
+    try {
+      await Filesystem.writeFile({
+        path: path,
+        data: content,
+        directory: Directory.Documents,
+        encoding: Encoding.UTF8,
+        recursive: true
+      });
+    } catch (e) {
+      console.error("Native FS Error:", e);
+    }
+  };
 
   const updateFileContent = useCallback((path: string, content: string) => {
     setProjects(prev => prev.map(p => {
@@ -71,6 +87,8 @@ export default function App(): React.JSX.Element {
       }
       return newP;
     }));
+    // Panggil Native Save
+    saveToNativeFileSystem(path, content);
   }, [activeProjectId]);
 
   const findFileByPath = useCallback((node: FileNode, path: string): FileNode | null => {
@@ -90,7 +108,7 @@ export default function App(): React.JSX.Element {
     switch (name) {
       case 'writeFile':
         updateFileContent(args.path, args.content);
-        return `Success: File ${args.path} updated.`;
+        return `Success: File ${args.path} updated and saved to storage.`;
       case 'readFile':
         const f = findFileByPath(activeProject.root, args.path);
         return f ? f.content : "Error: File not found.";
@@ -108,21 +126,29 @@ export default function App(): React.JSX.Element {
   };
 
   const onSendMessage = async (text: string) => {
+    // 1. Ambil API KEY dari Preferences (Runtime)
+    const { value: userApiKey } = await Preferences.get({ key: 'gemini_api_key' });
+    
+    if (!userApiKey) {
+      setActivePanel('settings');
+      alert("Tolong masukkan API Key Gemini di Settings terlebih dahulu.");
+      return;
+    }
+
     const userMsg: Message = { id: Date.now().toString(), role: 'user', content: text, timestamp: Date.now() };
     const newMessages = [...messages, userMsg];
     
     setMessagesByProject(prev => ({ ...prev, [activeProjectId]: newMessages }));
     setIsProcessing(true);
-    setActiveThought("Memulai analisis sistem..."); // Reset thought
+    setActiveThought("Memulai analisis sistem...");
 
     try {
       const systemPrompt = "You are DS-AI, a professional mobile IDE agent. Use tools to manage the project.";
-      const response = await chatWithAgent(newMessages, systemPrompt, handleToolCall, false);
+      
+      // Kirim userApiKey ke service
+      const response = await chatWithAgent(newMessages, systemPrompt, handleToolCall, false, userApiKey);
 
-      // Tangkap thought jika model memberikannya
-      if (response.thought) {
-        setActiveThought(response.thought);
-      }
+      if (response.thought) setActiveThought(response.thought);
 
       setMessagesByProject(prev => ({ ...prev, [activeProjectId]: [...newMessages, {
         id: (Date.now() + 1).toString(), role: 'model', content: response.text, timestamp: Date.now()
@@ -155,7 +181,7 @@ export default function App(): React.JSX.Element {
       
       {pendingToolCall && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
-          <div className="w-full max-w-sm bg-[#161b22] border border-[#30363d] rounded-2xl p-6 shadow-2xl animate-in zoom-in-95 duration-200">
+          <div className="w-full max-w-sm bg-[#161b22] border border-[#30363d] rounded-2xl p-6 shadow-2xl">
             <h3 className="font-bold text-xl mb-2 text-yellow-500 flex items-center gap-2">🛡️ Keamanan</h3>
             <p className="text-sm opacity-80 mb-4 text-gray-300">AI ingin melakukan <span className="text-blue-400 font-mono">{pendingToolCall.name}</span>. Izinkan?</p>
             <div className="flex gap-3">
@@ -190,7 +216,7 @@ export default function App(): React.JSX.Element {
               messages={messages} 
               onSendMessage={onSendMessage} 
               isProcessing={isProcessing}
-              activeThought={activeThought} // PROPS BARU
+              activeThought={activeThought}
             />
          </div>
 

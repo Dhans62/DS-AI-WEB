@@ -2,6 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { Theme } from '../types';
 import { testGeminiConnection } from '../services/geminiService';
 
+// IMPORT WAJIB UNTUK APK
+import { Preferences } from '@capacitor/preferences';
+
 interface SettingsProps {
   theme: Theme;
   onClose: () => void;
@@ -13,14 +16,22 @@ const Settings: React.FC<SettingsProps> = ({ theme, onClose }) => {
   const [saveStatus, setSaveStatus] = useState(false);
   const [testStatus, setTestStatus] = useState<{msg: string, color: string} | null>(null);
 
+  // LOAD KEY SAAT BUKA SETTINGS
   useEffect(() => {
-    const savedKey = localStorage.getItem('DS_AI_API_KEY');
-    if (savedKey) setApiKey(savedKey);
+    const loadKey = async () => {
+      // Prioritas: Preferences (Native), Fallback: localStorage (Web)
+      const { value } = await Preferences.get({ key: 'gemini_api_key' });
+      const savedKey = value || localStorage.getItem('DS_AI_API_KEY');
+      if (savedKey) setApiKey(savedKey);
+    };
+    loadKey();
   }, []);
 
-  const handleSave = () => {
+  const handleSave = async () => {
+    // SIMPAN KE KEDUA GUDANG AGAR AMAN (NATIVE + WEB)
+    await Preferences.set({ key: 'gemini_api_key', value: apiKey });
     localStorage.setItem('DS_AI_API_KEY', apiKey);
-    (window as any).GEMINI_API_KEY = apiKey;
+    
     setSaveStatus(true);
     setTimeout(() => setSaveStatus(false), 2000);
   };
@@ -37,7 +48,6 @@ const Settings: React.FC<SettingsProps> = ({ theme, onClose }) => {
     if (result.success) {
       setTestStatus({ msg: "✅ " + result.message, color: "text-green-500" });
     } else {
-      // Menampilkan pesan error detail dari Google
       setTestStatus({ 
         msg: `❌ FAILED: ${result.message}`, 
         color: "text-red-500" 
@@ -54,13 +64,11 @@ const Settings: React.FC<SettingsProps> = ({ theme, onClose }) => {
         </div>
 
         <div className="space-y-6">
-          {/* Model Info */}
           <div className="p-4 rounded-xl bg-green-500/10 border border-green-500/20">
             <h4 className="text-[10px] font-bold text-green-500 uppercase mb-1">Active Engine</h4>
             <p className="text-sm font-mono text-green-400">gemini-3-flash-preview</p>
           </div>
 
-          {/* API Key Input */}
           <div className="space-y-3">
             <h3 className="text-xs font-bold uppercase opacity-60">Master API Key</h3>
             <input 

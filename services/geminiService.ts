@@ -36,23 +36,26 @@ export const fileTools = [
 
 const MODEL_NAME = 'gemini-3-flash-preview';
 
-const getApiKey = () => {
-  const key = localStorage.getItem('DS_AI_API_KEY');
-  if (!key) throw new Error("API Key tidak ditemukan! Masukkan di Settings.");
-  return key;
-};
-
 /**
  * OTAK UTAMA CHAT
+ * Ditambahkan parameter optional: overrideApiKey
  */
 export async function chatWithAgent(
   messages: Message[], 
   systemInstruction: string,
   onToolCall: (name: string, args: any) => Promise<any>,
-  isConfirmed: boolean = false
+  isConfirmed: boolean = false,
+  overrideApiKey?: string // TAMBAHAN: Agar bisa terima kunci dari Capacitor Preferences
 ): Promise<AgentResponse> {
   
-  const ai = new GoogleGenAI({ apiKey: getApiKey() });
+  // Gunakan kunci dari parameter, jika tidak ada baru cari di localStorage (fallback)
+  const apiKey = overrideApiKey || localStorage.getItem('DS_AI_API_KEY');
+  
+  if (!apiKey) {
+    throw new Error("API Key tidak ditemukan! Masukkan di Settings.");
+  }
+
+  const ai = new GoogleGenAI({ apiKey });
 
   const config = {
     systemInstruction: systemInstruction + "\n\nSelalu jelaskan sebelum memanggil tool.",
@@ -85,8 +88,8 @@ export async function chatWithAgent(
       if (!isConfirmed) {
         return {
           text: text || "Saya punya rencana modifikasi file:",
-          thought: thought, // Kirim ke App.tsx
-          pendingActions: functionCalls,
+          thought: thought,
+          pendingActions: functionCalls as any, // Cast to any to match your types
           needsConfirmation: true
         };
       }
@@ -122,7 +125,7 @@ export async function chatWithAgent(
 
     return {
       text: response.text || "",
-      thought: thought, // Kirim ke App.tsx
+      thought: thought,
       needsConfirmation: false
     };
 
@@ -133,16 +136,13 @@ export async function chatWithAgent(
 }
 
 /**
- * FUNGSI TES KONEKSI (DIBERSIHKAN DARI SAMPAH LOGIKA CHAT)
+ * FUNGSI TES KONEKSI
  */
 export async function testGeminiConnection(apiKey: string) {
   const ai = new GoogleGenAI({ apiKey });
 
   try {
-    // 1. Verifikasi model tersedia
-    await ai.models.get({ model: MODEL_NAME }); 
-
-    // 2. Test respon ringan
+    // 1. Test respon ringan
     const result = await ai.models.generateContent({
       model: MODEL_NAME,
       contents: [{ role: 'user', parts: [{ text: 'Ping!' }] }],
