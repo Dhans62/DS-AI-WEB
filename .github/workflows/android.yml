@@ -1,7 +1,7 @@
 name: Build Android APK
 on:
   push:
-    branches: [ main, master ] # Sesuaikan dengan nama branch lu
+    branches: [ main, master ]
 
 jobs:
   build:
@@ -16,7 +16,9 @@ jobs:
           node-version: 18
 
       - name: Install Dependencies
-        run: npm install
+        run: |
+          npm install
+          npm install @capacitor/cli @capacitor/core @capacitor/android
 
       - name: Build Web Assets
         run: npm run build
@@ -32,12 +34,12 @@ jobs:
 
       - name: Build with Gradle
         run: |
-          chmod +x android/gradlew
-          cd android && ./gradlew assembleDebug
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: ds-ai-debug-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
-
