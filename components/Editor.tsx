@@ -5,7 +5,6 @@ interface EditorProps {
   theme: 'dark' | 'light';
   file: { path: string; content?: string } | null;
   onChange: (content: string) => void;
-  // MODUL D: State Terminal
   isConsoleOpen: boolean;
   toggleConsole: () => void;
   hasNewLogs?: boolean;
@@ -13,15 +12,14 @@ interface EditorProps {
 
 const Editor: React.FC<EditorProps> = ({ file, onChange, isConsoleOpen, toggleConsole, hasNewLogs }) => {
   const [code, setCode] = useState(file?.content || '');
-  const [caretCoords, setCaretCoords] = useState({ top: 0, left: 0, height: 0 });
   
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const highlightRef = useRef<HTMLDivElement>(null);
+  const lineNumbersRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (file) {
       setCode(file.content || '');
-      setTimeout(updateCaretPosition, 10);
     }
   }, [file]);
 
@@ -34,33 +32,18 @@ const Editor: React.FC<EditorProps> = ({ file, onChange, isConsoleOpen, toggleCo
       .replace(/(\/\/.*)/g, '<span class="token-comment">$1</span>');
   };
 
-  const updateCaretPosition = () => {
-    const textarea = textareaRef.current;
-    if (!textarea) return;
-
-    const selectionStart = textarea.selectionStart;
-    const textBeforeCaret = textarea.value.substring(0, selectionStart);
-    
-    const lines = textBeforeCaret.split('\n');
-    const currentLineNumber = lines.length - 1;
-    const currentLineText = lines[currentLineNumber];
-
-    const lineHeight = 1.6 * 14; 
-    const charWidth = 8.4; 
-
-    setCaretCoords({
-      top: currentLineNumber * lineHeight,
-      left: currentLineText.length * charWidth,
-      height: lineHeight
-    });
-  };
-
   const handleScroll = () => {
-    if (textareaRef.current && highlightRef.current) {
-      highlightRef.current.scrollTop = textareaRef.current.scrollTop;
-      highlightRef.current.scrollLeft = textareaRef.current.scrollLeft;
+    if (textareaRef.current && highlightRef.current && lineNumbersRef.current) {
+      const scrollTop = textareaRef.current.scrollTop;
+      const scrollLeft = textareaRef.current.scrollLeft;
+      
+      highlightRef.current.scrollTop = scrollTop;
+      highlightRef.current.scrollLeft = scrollLeft;
+      lineNumbersRef.current.scrollTop = scrollTop;
     }
   };
+
+  const lineCount = code.split('\n').length;
 
   if (!file) {
     return (
@@ -71,48 +54,61 @@ const Editor: React.FC<EditorProps> = ({ file, onChange, isConsoleOpen, toggleCo
   }
 
   return (
-    <div className="editor-floating-canvas relative">
-      <div className="editor-container">
-        
-        {/* Layer 1: Highlighting */}
-        <div 
-          ref={highlightRef}
-          className="editor-highlight"
-          dangerouslySetInnerHTML={{ __html: highlightCode(code) + "\n" }}
-        />
-        
-        {/* Layer 2: Penanda Baris (Living Caret) */}
-        <div 
-          className="custom-caret"
-          style={{ 
-            top: `${caretCoords.top - (textareaRef.current?.scrollTop || 0)}px`, 
-            left: `${caretCoords.left - (textareaRef.current?.scrollLeft || 0)}px`,
-            height: `${caretCoords.height}px`
-          }}
-        />
-
-        {/* Layer 3: Invisible Input */}
-        <textarea
-          ref={textareaRef}
-          value={code}
-          onChange={(e) => {
-            setCode(e.target.value);
-            onChange(e.target.value);
-            updateCaretPosition();
-          }}
-          onScroll={handleScroll}
-          onSelect={updateCaretPosition}
-          onKeyUp={updateCaretPosition}
-          className="editor-input"
-          spellCheck={false}
-          autoCapitalize="off"
-        />
+    <div className="editor-floating-canvas relative flex flex-col h-full overflow-hidden">
+      {/* HEADER INFO */}
+      <div className="px-4 py-2 bg-[#161b22] border-b border-[#30363d] flex justify-between items-center">
+        <span className="text-[10px] font-mono text-blue-400 truncate max-w-[70%]">{file.path}</span>
+        <span className="text-[9px] font-bold opacity-50 uppercase">{lineCount} Lines</span>
       </div>
 
-      {/* TOMBOL FLOATING TERMINAL (MODUL D) */}
+      <div className="flex-1 relative flex overflow-hidden bg-[#0d1117]">
+        
+        {/* 1. LINE NUMBERS (NEW) */}
+        <div 
+          ref={lineNumbersRef}
+          className="w-12 bg-[#0d1117] border-r border-[#30363d] text-right pr-3 pt-4 font-mono text-[13px] text-gray-600 select-none overflow-hidden"
+          style={{ lineHeight: '1.6' }}
+        >
+          {Array.from({ length: lineCount }).map((_, i) => (
+            <div key={i}>{i + 1}</div>
+          ))}
+        </div>
+
+        {/* 2. EDITOR WORKSPACE */}
+        <div className="flex-1 relative overflow-hidden">
+          {/* Layer: Highlighting */}
+          <div 
+            ref={highlightRef}
+            className="editor-highlight pointer-events-none absolute inset-0 p-4 font-mono text-[13px] whitespace-pre overflow-hidden"
+            style={{ lineHeight: '1.6', zIndex: 1 }}
+            dangerouslySetInnerHTML={{ __html: highlightCode(code) + "\n" }}
+          />
+          
+          {/* Layer: Native Input (The Real Caret) */}
+          <textarea
+            ref={textareaRef}
+            value={code}
+            onChange={(e) => {
+              setCode(e.target.value);
+              onChange(e.target.value);
+            }}
+            onScroll={handleScroll}
+            spellCheck={false}
+            autoCapitalize="off"
+            className="editor-input absolute inset-0 w-full h-full p-4 font-mono text-[13px] bg-transparent text-transparent caret-blue-500 outline-none resize-none whitespace-pre overflow-auto"
+            style={{ 
+              lineHeight: '1.6', 
+              zIndex: 2,
+              WebkitTextFillColor: 'transparent' // Penting agar teks asli gak tumpukan sama highlight
+            }}
+          />
+        </div>
+      </div>
+
+      {/* TOMBOL FLOATING TERMINAL */}
       <button 
         onClick={toggleConsole}
-        className={`absolute bottom-6 right-6 w-12 h-12 rounded-2xl flex items-center justify-center transition-all duration-300 z-[50] shadow-2xl active:scale-90 ${
+        className={`fixed bottom-6 right-6 w-12 h-12 rounded-2xl flex items-center justify-center transition-all duration-300 z-[50] shadow-2xl active:scale-90 ${
           isConsoleOpen 
             ? 'bg-blue-600 text-white rotate-180' 
             : 'bg-[#161b22] border border-[#30363d] text-gray-400'

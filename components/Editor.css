@@ -1,83 +1,78 @@
+/* Editor.css - Precise DS-AI Update */
+
 .editor-floating-canvas {
   position: relative;
   flex: 1;
   width: 100%;
   height: 100%;
-  /* Mencegah tabrakan dengan Status Bar & Home Indicator */
-  padding-top: env(safe-area-inset-top, 20px); 
-  padding-bottom: env(safe-area-inset-bottom, 20px);
   overflow: hidden;
-  background: transparent;
+  background: #0d1117;
 }
 
 .editor-container {
-  position: relative;
+  display: flex;
   width: 100%;
   height: 100%;
-  font-family: 'Fira Code', monospace;
-  font-size: 14px;
-  line-height: 1.6;
+  /* Paksa font monospaced agar kursor tidak meleset */
+  font-family: 'Fira Code', 'JetBrains Mono', monospace !important;
+  font-size: 12px; /* Diperkecil sesuai request */
+  line-height: 1.5; /* Golden ratio untuk kursor presisi */
 }
 
-.floating-terminal-btn {
-  z-index: 100 !important;
-  box-shadow: 0 0 20px rgba(0, 0, 0, 0.5), 0 0 10px rgba(59, 130, 246, 0.3);
-}
-
-
-/* Layer Input */
+/* Layer Input - Driver Utama */
 .editor-input {
-  position: absolute;
-  top: 20px; left: 20px; right: 20px; bottom: 20px;
-  width: calc(100% - 40px);
-  height: calc(100% - 40px);
   background: transparent;
-  color: transparent;
-  caret-color: transparent; /* Sembunyikan caret kaku bawaan OS */
+  color: transparent !important;
+  -webkit-text-fill-color: transparent;
+  caret-color: #58a6ff; /* Caret asli agar presisi 100% */
   resize: none;
   border: none;
   outline: none;
   white-space: pre;
-  overflow-wrap: normal;
-  overflow: auto;
-  z-index: 2;
-  font: inherit;
+  font-family: inherit;
+  font-size: inherit;
   line-height: inherit;
-  padding: 0;
+  padding: 14px !important; /* Sinkron dengan highlight */
   margin: 0;
+  tab-size: 2;
+  z-index: 2;
 }
 
-/* Layer Highlighting */
+/* Layer Highlighting - Visual */
 .editor-highlight {
-  position: absolute;
-  top: 20px; left: 20px; right: 20px; bottom: 20px;
   pointer-events: none;
   white-space: pre;
-  overflow: hidden;
-  z-index: 1;
-  font: inherit;
+  font-family: inherit;
+  font-size: inherit;
   line-height: inherit;
   color: #e6edf3;
-  padding: 0;
+  padding: 14px !important; /* WAJIB SAMA dengan editor-input */
   margin: 0;
+  tab-size: 2;
+  z-index: 1;
 }
 
-/* PENANDA BARIS/CARET ANIMASI */
-.custom-caret {
-  position: absolute;
-  width: 2px;
-  background: #58a6ff;
-  box-shadow: 0 0 8px #58a6ff;
-  z-index: 1; /* Di bawah teks agar tidak menutupi huruf */
-  pointer-events: none;
-  /* Transisi meluncur: cubic-bezier memberikan efek pegas/smooth */
-  transition: all 0.12s cubic-bezier(0.19, 1, 0.22, 1);
-  animation: breathing 1.5s infinite ease-in-out;
+/* Kolom Angka (Gutter) */
+.line-numbers {
+  user-select: none;
+  background: #0d1117;
+  color: #30363d;
+  border-right: 1px solid #30363d;
+  text-align: right;
+  padding-top: 14px; /* Sinkron dengan padding-top editor-input */
+  font-family: inherit;
+  font-size: 10px; /* Angka sedikit lebih kecil agar rapi */
+  width: 35px; /* Lebar statis agar tidak goyang */
+  overflow: hidden;
 }
 
-@keyframes breathing {
-  0%, 100% { opacity: 0.8; }
-  50% { opacity: 0.2; }
+/* Kunci tinggi baris angka agar sinkron dengan teks */
+.line-numbers div {
+  height: 18px; /* 12px font * 1.5 line-height = 18px */
+  padding-right: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
 }
 
 /* Syntax Highlighting */
@@ -85,3 +80,14 @@
 .token-function { color: #d2a8ff; }
 .token-string { color: #a5d6ff; }
 .token-comment { color: #8b949e; font-style: italic; }
+
+/* Scrollbar Pro */
+.editor-input::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+.editor-input::-webkit-scrollbar-thumb {
+  background: #30363d;
+  border-radius: 10px;
+}

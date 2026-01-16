@@ -34,21 +34,19 @@ export const fileTools = [
   }
 ];
 
-const MODEL_NAME = 'gemini-3-flash-preview';
-
 /**
- * OTAK UTAMA CHAT
- * Ditambahkan parameter optional: overrideApiKey
+ * OTAK UTAMA CHAT - MULTI MODEL & VISION SUPPORT
  */
 export async function chatWithAgent(
   messages: Message[], 
   systemInstruction: string,
   onToolCall: (name: string, args: any) => Promise<any>,
   isConfirmed: boolean = false,
-  overrideApiKey?: string // TAMBAHAN: Agar bisa terima kunci dari Capacitor Preferences
+  overrideApiKey?: string,
+  modelName: string = 'gemini-3-flash-preview', // DEFAULT MODEL
+  imageData?: { data: string; mimeType: string } // UNTUK ANALISIS FOTO
 ): Promise<AgentResponse> {
   
-  // Gunakan kunci dari parameter, jika tidak ada baru cari di localStorage (fallback)
   const apiKey = overrideApiKey || localStorage.getItem('DS_AI_API_KEY');
   
   if (!apiKey) {
@@ -57,39 +55,58 @@ export async function chatWithAgent(
 
   const ai = new GoogleGenAI({ apiKey });
 
-  const config = {
+  // Hanya aktifkan thinkingConfig jika menggunakan model gemini-3
+  const config: any = {
     systemInstruction: systemInstruction + "\n\nSelalu jelaskan sebelum memanggil tool.",
-    thinkingConfig: {
-      thinkingLevel: 'HIGH',
-    },
     tools: [{ functionDeclarations: fileTools }],
   };
 
-  const contents = messages.map(msg => ({
+  if (modelName.includes('gemini-3')) {
+    config.thinkingConfig = { thinkingLevel: 'HIGH' };
+  }
+
+  // --- OPTIMASI KONTEKS ---
+  const contextWindow = messages.slice(-10);
+
+  const contents = contextWindow.map(msg => ({
     role: msg.role === 'user' ? 'user' : 'model',
     parts: typeof msg.content === 'string' ? [{ text: msg.content }] : msg.content
   }));
 
+  // INPUT GAMBAR (Jika ada foto di pesan terakhir)
+  if (imageData && contents.length > 0) {
+    const lastMsg = contents[contents.length - 1];
+    if (lastMsg.role === 'user') {
+      lastMsg.parts.push({
+        inlineData: {
+          data: imageData.data,
+          mimeType: imageData.mimeType
+        }
+      });
+    }
+  }
+
   try {
     const response = await ai.models.generateContent({
-      model: MODEL_NAME,
+      model: modelName, // MENGGUNAKAN MODEL DINAMIS (3.0 atau 2.5)
       contents,
       config,
     });
 
     const candidate = response.candidates?.[0];
-    const text = candidate?.content?.parts?.find(p => p.text)?.text || "";
-    // EKSTRAKSI THOUGHT UNTUK UI
+    if (!candidate) throw new Error("AI tidak memberikan respon.");
+
+    const text = candidate.content?.parts?.find(p => p.text)?.text || "";
     const thought = (candidate as any)?.thought || ""; 
     
-    const functionCalls = candidate?.content?.parts?.filter(p => p.functionCall).map(p => p.functionCall);
+    const functionCalls = candidate.content?.parts?.filter(p => p.functionCall).map(p => p.functionCall);
 
     if (functionCalls && functionCalls.length > 0) {
       if (!isConfirmed) {
         return {
           text: text || "Saya punya rencana modifikasi file:",
           thought: thought,
-          pendingActions: functionCalls as any, // Cast to any to match your types
+          pendingActions: functionCalls as any,
           needsConfirmation: true
         };
       }
@@ -107,10 +124,10 @@ export async function chatWithAgent(
       }
 
       const nextResponse = await ai.models.generateContent({
-        model: MODEL_NAME,
+        model: modelName,
         contents: [
           ...contents,
-          { role: 'model', parts: candidate?.content?.parts || [] },
+          { role: 'model', parts: candidate.content?.parts || [] },
           { role: 'user', parts: results as any }
         ],
         config
@@ -124,38 +141,29 @@ export async function chatWithAgent(
     }
 
     return {
-      text: response.text || "",
+      text: text,
       thought: thought,
       needsConfirmation: false
     };
 
   } catch (error: any) {
-    console.error("Gemini 3 Error:", error);
-    throw new Error(`[DS-AI Error] ${error.message}`);
+    console.error(`Error on ${modelName}:`, error);
+    throw new Error(error.message);
   }
 }
 
 /**
- * FUNGSI TES KONEKSI
+ * FUNGSI TES KONEKSI (Mendukung tes model spesifik)
  */
-export async function testGeminiConnection(apiKey: string) {
+export async function testGeminiConnection(apiKey: string, modelName: string = 'gemini-3-flash-preview') {
   const ai = new GoogleGenAI({ apiKey });
-
   try {
-    // 1. Test respon ringan
     const result = await ai.models.generateContent({
-      model: MODEL_NAME,
+      model: modelName,
       contents: [{ role: 'user', parts: [{ text: 'Ping!' }] }],
     });
-
-    return { 
-      success: true, 
-      message: `Koneksi Berhasil! Respon: ${result.text?.trim()}` 
-    };
+    return { success: true, message: `Berhasil (${modelName})!` };
   } catch (error: any) {
-    return { 
-      success: false, 
-      message: error.message 
-    };
+    return { success: false, message: error.message };
   }
 }

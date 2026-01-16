@@ -118,33 +118,98 @@ export default function App(): React.JSX.Element {
     });
   };
 
-  const onSendMessage = async (text: string) => {
-    const { value: userApiKey } = await Preferences.get({ key: 'gemini_api_key' });
-    if (!userApiKey) {
+  // --- LOGIKA MULTI-MODEL, MULTI-KEY & VISION ---
+  const onSendMessage = async (text: string, imageData?: { data: string, mimeType: string }) => {
+    if (isProcessing || (!text.trim() && !imageData)) return;
+
+    const { value: rawKeys } = await Preferences.get({ key: 'gemini_api_key' });
+    if (!rawKeys) {
         setActivePanel('settings');
         return alert("Input API Key di Settings.");
     }
 
-    const userMsg: Message = { id: Date.now().toString(), projectId: activeProjectId, role: 'user', content: text, timestamp: Date.now() };
+    const apiKeys = rawKeys.split(',').map(k => k.trim()).filter(k => k !== "");
+    
+    // User message object
+    const userMsg: Message = { 
+      id: Date.now().toString(), 
+      projectId: activeProjectId, 
+      role: 'user', 
+      content: text || (imageData ? "[Sent Image]" : ""), 
+      timestamp: Date.now() 
+    };
+
     const updatedMessages = [...messages, userMsg];
     setMessages(updatedMessages);
     setIsProcessing(true);
-    addLog(`User message sent.`, 'info');
+    
+    if (imageData) addLog("Sending image for analysis...", "info");
+    addLog(`Initiating DS-AI Core...`, 'info');
 
-    try {
-      const tree = await scanDirectory('root');
-      const systemPrompt = `Kamu DS-AI, IDE Agent Berintegritas. Tugas: Bantu user mengelola file secara strategis.`;
-      const response = await chatWithAgent(updatedMessages, systemPrompt, handleToolCall, false, userApiKey);
-      const aiMsg: Message = { id: (Date.now() + 1).toString(), projectId: activeProjectId, role: 'model', content: response.text, thought: response.thought, timestamp: Date.now() };
-      const finalMessages = [...updatedMessages, aiMsg];
-      setMessages(finalMessages);
-      await Preferences.set({ key: `chat_log_${activeProjectId}`, value: JSON.stringify(finalMessages) });
-    } catch (err: any) {
-      addLog(`AI Error: ${err.message}`, 'error');
-      setIsConsoleOpen(true);
-    } finally {
-      setIsProcessing(false);
+    const availableModels = ['gemini-3-flash-preview', 'gemini-2.5-flash'];
+    let success = false;
+    let finalError = "";
+
+    // OUTER LOOP: Iterasi Model
+    for (const modelName of availableModels) {
+      if (success) break;
+
+      // INNER LOOP: Iterasi API Keys
+      for (let i = 0; i < apiKeys.length; i++) {
+        try {
+          const currentKey = apiKeys[i];
+          addLog(`Requesting ${modelName} (Key #${i + 1})...`, 'ai');
+
+          const systemPrompt = `Kamu DS-AI, IDE Agent Berintegritas. Gunakan model ${modelName}. Fokus eksekusi file.`;
+          
+          // Kirim payload lengkap ke service
+          const response = await chatWithAgent(
+            updatedMessages, 
+            systemPrompt, 
+            handleToolCall, 
+            false, 
+            currentKey, 
+            modelName,
+            imageData // PASSING DATA GAMBAR
+          );
+
+          const aiMsg: Message = { 
+            id: (Date.now() + 1).toString(), 
+            projectId: activeProjectId, 
+            role: 'model', 
+            content: response.text, 
+            thought: response.thought, 
+            timestamp: Date.now() 
+          };
+
+          const finalMessages = [...updatedMessages, aiMsg];
+          setMessages(finalMessages);
+          await Preferences.set({ key: `chat_log_${activeProjectId}`, value: JSON.stringify(finalMessages) });
+          
+          success = true;
+          addLog(`Success with ${modelName}`, 'info');
+          break; 
+        } catch (err: any) {
+          finalError = err.message;
+          if (finalError.includes('429')) {
+            addLog(`Key #${i + 1} Limit for ${modelName}.`, 'warn');
+            continue; 
+          } else {
+            addLog(`Error: ${finalError}`, 'error');
+            break; 
+          }
+        }
+      }
+      
+      if (!success) addLog(`${modelName} failed on all keys. Falling back...`, 'warn');
     }
+
+    if (!success) {
+      setIsConsoleOpen(true);
+      alert(`SEMUA MODEL & KEY LIMIT: ${finalError}`);
+    }
+
+    setIsProcessing(false);
   };
 
   const handlePermission = async (approved: boolean) => {
@@ -157,7 +222,6 @@ export default function App(): React.JSX.Element {
   };
 
   return (
-    // Tambah pt-[env(safe-area-inset-top)] agar tidak tertutup Status Bar HP
     <div className={`fixed inset-0 flex flex-col overflow-hidden pt-[var(--safe-area-top,20px)] ${theme === 'dark' ? 'bg-[#0d1117] text-gray-200' : 'bg-slate-50'}`}>
       
       {/* SECURITY MODAL */}
@@ -185,7 +249,6 @@ export default function App(): React.JSX.Element {
            />
          )}
          
-         {/* EDITOR & CONSOLE LAYER */}
          <div className={`flex-1 relative ${activePanel === 'editor' ? 'block' : 'hidden'}`}>
             <Editor 
               theme={theme} 
@@ -198,7 +261,6 @@ export default function App(): React.JSX.Element {
               }}
               hasNewLogs={hasNewLogs}
             />
-            {/* Console harus di dalam container yang sama dengan Editor & punya Z-index tinggi */}
             <Console 
               logs={logs} 
               onClear={clearLogs} 
@@ -207,7 +269,13 @@ export default function App(): React.JSX.Element {
          </div>
 
          <div className={`flex-1 ${activePanel === 'chat' ? 'flex' : 'hidden'}`}>
-            <ChatPanel theme={theme} messages={messages} onSendMessage={onSendMessage} isProcessing={isProcessing} activeThought={activeThought} />
+            <ChatPanel 
+                theme={theme} 
+                messages={messages} 
+                onSendMessage={onSendMessage} 
+                isProcessing={isProcessing} 
+                activeThought={activeThought} 
+            />
          </div>
 
          {activePanel === 'settings' && <Settings theme={theme} onClose={() => setActivePanel('editor')} />}
