@@ -1,0 +1,83 @@
+.editor-floating-canvas {
+  margin: 12px;
+  border-radius: 20px;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+  position: relative;
+  overflow: hidden;
+  flex: 1;
+  display: flex;
+}
+
+.editor-container {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  padding: 20px;
+  font-family: 'Fira Code', 'Courier New', monospace;
+  font-size: 14px;
+  line-height: 1.6;
+  overflow: hidden;
+}
+
+/* Layer Input */
+.editor-input {
+  position: absolute;
+  top: 20px; left: 20px; right: 20px; bottom: 20px;
+  width: calc(100% - 40px);
+  height: calc(100% - 40px);
+  background: transparent;
+  color: transparent;
+  caret-color: transparent; /* Sembunyikan caret kaku bawaan OS */
+  resize: none;
+  border: none;
+  outline: none;
+  white-space: pre;
+  overflow-wrap: normal;
+  overflow: auto;
+  z-index: 2;
+  font: inherit;
+  line-height: inherit;
+  padding: 0;
+  margin: 0;
+}
+
+/* Layer Highlighting */
+.editor-highlight {
+  position: absolute;
+  top: 20px; left: 20px; right: 20px; bottom: 20px;
+  pointer-events: none;
+  white-space: pre;
+  overflow: hidden;
+  z-index: 1;
+  font: inherit;
+  line-height: inherit;
+  color: #e6edf3;
+  padding: 0;
+  margin: 0;
+}
+
+/* PENANDA BARIS/CARET ANIMASI */
+.custom-caret {
+  position: absolute;
+  width: 2px;
+  background: #58a6ff;
+  box-shadow: 0 0 8px #58a6ff;
+  z-index: 1; /* Di bawah teks agar tidak menutupi huruf */
+  pointer-events: none;
+  /* Transisi meluncur: cubic-bezier memberikan efek pegas/smooth */
+  transition: all 0.12s cubic-bezier(0.19, 1, 0.22, 1);
+  animation: breathing 1.5s infinite ease-in-out;
+}
+
+@keyframes breathing {
+  0%, 100% { opacity: 0.8; }
+  50% { opacity: 0.2; }
+}
+
+/* Syntax Highlighting */
+.token-keyword { color: #ff7b72; font-weight: bold; }
+.token-function { color: #d2a8ff; }
+.token-string { color: #a5d6ff; }
+.token-comment { color: #8b949e; font-style: italic; }

@@ -1,5 +1,12 @@
-import React from 'react';
-import { Project, FileNode, Theme } from '../types';
+import React, { useState, useEffect } from 'react';
+import { Project, Theme } from '../types';
+import { 
+  FileNode, 
+  scanDirectory, 
+  deleteNativeNode, 
+  createNativeNode, 
+  renameNativeNode 
+} from '../services/fsService';
 
 interface SidebarProps {
   theme: Theme;
@@ -10,123 +17,198 @@ interface SidebarProps {
   activeFilePath: string | null;
   setActiveFilePath: (p: string | null) => void;
   onDownload: () => void;
-  onClose?: () => void;
 }
 
-const Sidebar: React.FC<SidebarProps> = ({ theme, projects, setProjects, activeProjectId, setActiveProjectId, activeFilePath, setActiveFilePath, onDownload, onClose }) => {
+const Sidebar: React.FC<SidebarProps> = ({ theme, activeProjectId, activeFilePath, setActiveFilePath, onDownload }) => {
   const isDark = theme === 'dark';
-  const activeProject = projects.find(p => p.id === activeProjectId) || projects[0];
+  const [tree, setTree] = useState<FileNode[]>([]);
+  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set(['root']));
+  
+  // State untuk UI Manajemen
+  const [activeNode, setActiveNode] = useState<FileNode | null>(null);
+  const [showSheet, setShowSheet] = useState(false);
+  const [dialog, setDialog] = useState<{show: boolean, type: 'rename' | 'newFile' | 'newFolder', val: string}>({
+    show: false, type: 'rename', val: ''
+  });
+  
+  const timerRef = React.useRef<any>(null);
 
-  // LOGIK RECURSIVE: Menemukan dan mengubah node
-  const updateTree = (callback: (newRoot: FileNode) => void) => {
-    setProjects(prev => prev.map(p => {
-      if (p.id !== activeProjectId) return p;
-      const newP = JSON.parse(JSON.stringify(p));
-      callback(newP.root);
-      return newP;
-    }));
+  const refreshTree = async () => {
+    const nodes = await scanDirectory('root');
+    setTree(nodes);
   };
+
+  useEffect(() => {
+    refreshTree();
+  }, [activeProjectId]);
 
   const toggleFolder = (path: string) => {
-    updateTree((root) => {
-      const toggle = (node: FileNode) => {
-        if (node.path === path) { node.isExpanded = !node.isExpanded; return true; }
-        if (node.children) { for (let n of node.children) if (toggle(n)) return true; }
-        return false;
-      };
-      toggle(root);
+    setExpandedFolders(prev => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
     });
   };
 
-  const createItem = (parentPath: string, type: 'file' | 'folder') => {
-    const name = prompt(`Enter ${type} name:`);
-    if (!name) return;
-    updateTree((root) => {
-      const add = (node: FileNode) => {
-        if (node.path === parentPath) {
-          node.children = node.children || [];
-          const newPath = parentPath === '/' ? `/${name}` : `${parentPath}/${name}`;
-          node.children.push({ 
-            name, path: newPath, type, isExpanded: true, 
-            children: type === 'folder' ? [] : undefined, 
-            content: type === 'file' ? '// Write code here...' : undefined 
-          });
-          return true;
-        }
-        if (node.children) { for (let c of node.children) if (add(c)) return true; }
-        return false;
-      };
-      add(root);
-    });
+  // LONG PRESS LOGIC
+  const handleTouchStart = (node: FileNode) => {
+    timerRef.current = setTimeout(() => {
+      setActiveNode(node);
+      setShowSheet(true);
+      if ('vibrate' in navigator) navigator.vibrate(50);
+    }, 600);
+  };
+
+  const handleTouchEnd = () => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+  };
+
+  // CRUD ACTIONS
+  const handleDelete = async () => {
+    if (activeNode && confirm(`Hapus permanen ${activeNode.name}?`)) {
+      await deleteNativeNode(activeNode.path);
+      setShowSheet(false);
+      refreshTree();
+    }
+  };
+
+  const handleActionSubmit = async () => {
+    if (!dialog.val || !activeNode) return;
+
+    try {
+      if (dialog.type === 'rename') {
+        await renameNativeNode(activeNode.path, dialog.val);
+      } else {
+        const type = dialog.type === 'newFile' ? 'file' : 'folder';
+        const newPath = `${activeNode.path}/${dialog.val}`.replace(/\/+/g, '/');
+        await createNativeNode(newPath, type);
+      }
+      setDialog({ ...dialog, show: false });
+      setShowSheet(false);
+      refreshTree();
+    } catch (e: any) {
+      alert("Gagal: " + e.message);
+    }
   };
 
   const renderTree = (nodes: FileNode[], depth = 0) => {
-    return nodes.map((node) => (
-      <div key={node.path} className="select-none">
-        <div 
-          onClick={() => node.type === 'folder' ? toggleFolder(node.path) : setActiveFilePath(node.path)}
-          className={`group flex items-center justify-between py-1.5 px-3 cursor-pointer transition-colors ${
-            activeFilePath === node.path ? 'bg-[#21262d] text-[#58a6ff]' : 'hover:bg-[#161b22] text-gray-400'
-          }`}
-          style={{ paddingLeft: `${depth * 12 + 12}px` }}
-        >
-          <div className="flex items-center gap-2 truncate">
-            <span className="text-sm opacity-80">{node.type === 'folder' ? (node.isExpanded ? '📂' : '📁') : '📄'}</span>
-            <span className={`text-xs font-mono truncate ${activeFilePath === node.path ? 'font-bold' : ''}`}>
-              {node.name}
-            </span>
+    return nodes.map((node) => {
+      const isExpanded = expandedFolders.has(node.path);
+      const isActive = activeFilePath === node.path;
+
+      return (
+        <div key={node.path} className="select-none">
+          <div 
+            onTouchStart={() => handleTouchStart(node)}
+            onTouchEnd={handleTouchEnd}
+            onClick={() => node.type === 'folder' ? toggleFolder(node.path) : setActiveFilePath(node.path)}
+            className={`flex items-center justify-between py-2.5 px-4 cursor-pointer transition-all active:bg-blue-500/10 ${
+              isActive ? 'bg-blue-500/10 border-l-2 border-blue-500 text-blue-400' : 'text-gray-400'
+            }`}
+            style={{ paddingLeft: `${depth * 16 + 16}px` }}
+          >
+            <div className="flex items-center gap-3 truncate">
+              <span className="text-lg leading-none">
+                {node.type === 'folder' ? (isExpanded ? '📂' : '📁') : '📄'}
+              </span>
+              <span className={`text-sm font-medium truncate ${isActive ? 'text-blue-100' : ''}`}>
+                {node.name}
+              </span>
+            </div>
           </div>
-          
-          {/* Action Buttons (Hanya muncul saat hover/aktif) */}
-          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100">
-            {node.type === 'folder' && (
-              <button onClick={(e) => { e.stopPropagation(); createItem(node.path, 'file'); }} className="p-1 hover:text-green-500 text-[10px]">✚</button>
-            )}
-            {node.path !== '/' && (
-              <button onClick={(e) => { e.stopPropagation(); if(confirm("Hapus?")) { /* logic delete */ } }} className="p-1 hover:text-red-500 text-[10px]">✕</button>
-            )}
-          </div>
+          {node.type === 'folder' && isExpanded && node.children && renderTree(node.children, depth + 1)}
         </div>
-        {node.type === 'folder' && node.isExpanded && node.children && renderTree(node.children, depth + 1)}
-      </div>
-    ));
+      );
+    });
   };
 
   return (
-    <div className={`w-full h-full flex flex-col ${isDark ? 'bg-[#0d1117] border-r border-[#30363d]' : 'bg-slate-100'}`}>
+    <div className={`w-full h-full flex flex-col ${isDark ? 'bg-[#0d1117]' : 'bg-slate-100'}`}>
       
-      {/* HEADER: Proyek & Download */}
-      <div className="p-4 space-y-4 shrink-0">
+      {/* HEADER */}
+      <div className="p-6 space-y-4 shrink-0">
         <div className="flex items-center justify-between">
-          <span className="text-[10px] font-black uppercase tracking-tighter text-[#8b949e]">DS-AI Explorer</span>
-          <button onClick={() => {/* logic new project */}} className="text-[#238636] text-[10px] font-bold hover:underline">+ PROJECT</button>
+          <span className="text-[10px] font-black uppercase tracking-widest text-blue-500">DS-AI Explorer</span>
+          <button 
+            onClick={() => { setActiveNode(tree[0]); setDialog({show: true, type: 'newFolder', val: ''}); }}
+            className="bg-blue-500/10 text-blue-500 px-3 py-1 rounded-full text-[10px] font-bold"
+          >
+            NEW +
+          </button>
         </div>
-
         <button 
           onClick={onDownload}
-          className="w-full flex items-center justify-center gap-2 bg-[#238636] hover:bg-[#2ea043] text-white text-[11px] font-bold py-2 rounded shadow-lg transition-transform active:scale-95"
+          className="w-full flex items-center justify-center gap-2 bg-[#238636] hover:bg-[#2ea043] text-white text-xs font-bold py-3 rounded-xl shadow-lg active:scale-95 transition-all"
         >
           📦 EXPORT TO .ZIP
         </button>
       </div>
 
-      {/* FILE TREE AREA */}
-      <div className="flex-1 overflow-y-auto custom-scrollbar">
-        <div className="px-4 py-2 flex items-center justify-between bg-[#161b22] border-y border-[#30363d]">
-          <span className="text-[10px] font-bold text-gray-500 uppercase">Project Root</span>
-          <button onClick={() => createItem('/', 'folder')} className="text-[10px] text-[#58a6ff] hover:underline">NEW FOLDER</button>
+      <div className="flex-1 overflow-y-auto">
+        <div className="px-6 py-2 mb-2">
+          <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Active Workspace</span>
         </div>
-        <div className="py-2">
-          {renderTree([activeProject.root])}
-        </div>
+        {renderTree(tree)}
       </div>
 
-      {/* FOOTER: Status Sandbox */}
-      <div className="p-2 border-t border-[#30363d] bg-[#0d1117]">
+      {/* DIALOG INPUT (MODAL TENGAH) */}
+      {dialog.show && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center p-6 bg-black/80 backdrop-blur-md">
+          <div className="w-full max-w-xs bg-[#161b22] border border-[#30363d] rounded-2xl p-6 shadow-2xl animate-in zoom-in-95">
+            <h4 className="text-xs font-bold text-blue-500 uppercase mb-4">{dialog.type.replace(/([A-Z])/g, ' $1')}</h4>
+            <input 
+              autoFocus
+              className="w-full bg-[#0d1117] border border-[#30363d] rounded-lg p-3 text-sm outline-none focus:border-blue-500 mb-4"
+              value={dialog.val}
+              onChange={(e) => setDialog({...dialog, val: e.target.value})}
+              placeholder="Enter name..."
+              onKeyDown={(e) => e.key === 'Enter' && handleActionSubmit()}
+            />
+            <div className="flex gap-2">
+              <button onClick={() => setDialog({...dialog, show: false})} className="flex-1 py-2 text-xs font-bold opacity-50">Cancel</button>
+              <button onClick={handleActionSubmit} className="flex-1 py-2 bg-blue-600 rounded-lg text-xs font-bold">Confirm</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* BOTTOM SHEET */}
+      {showSheet && (
+        <>
+          <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[100]" onClick={() => setShowSheet(false)} />
+          <div className="fixed bottom-0 left-0 right-0 z-[101] bg-[#161b22] border-t border-[#30363d] rounded-t-[2.5rem] p-8 bottom-sheet-active">
+            <div className="w-12 h-1.5 bg-gray-700 rounded-full mx-auto mb-8" />
+            
+            <div className="mb-6">
+              <p className="text-[10px] font-bold text-blue-500 uppercase mb-1">{activeNode?.type}</p>
+              <h3 className="text-xl font-bold text-gray-100 truncate">{activeNode?.name}</h3>
+            </div>
+            
+            <div className="grid grid-cols-1 gap-2">
+              {activeNode?.type === 'folder' && (
+                <>
+                  <button onClick={() => setDialog({show: true, type: 'newFile', val: ''})} className="w-full p-4 bg-[#21262d] rounded-2xl flex items-center gap-4 text-sm font-semibold">📄 New File</button>
+                  <button onClick={() => setDialog({show: true, type: 'newFolder', val: ''})} className="w-full p-4 bg-[#21262d] rounded-2xl flex items-center gap-4 text-sm font-semibold">📁 New Folder</button>
+                </>
+              )}
+              <button onClick={() => setDialog({show: true, type: 'rename', val: activeNode?.name || ''})} className="w-full p-4 bg-[#21262d] rounded-2xl flex items-center gap-4 text-sm font-semibold">✏️ Rename</button>
+              <button onClick={handleDelete} className="w-full p-4 bg-red-500/10 text-red-500 rounded-2xl flex items-center gap-4 text-sm font-semibold">🗑️ Delete</button>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* FOOTER */}
+      <div className="p-4 border-t border-[#30363d] bg-[#0d1117] flex items-center justify-between">
          <div className="flex items-center gap-2 px-2">
-            <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
-            <span className="text-[9px] text-gray-500 font-mono uppercase">Sandbox Protected</span>
+            <div className="w-2 h-2 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]"></div>
+            <span className="text-[9px] text-gray-500 font-bold uppercase">Native FS Active</span>
          </div>
+         <span className="text-[9px] text-gray-600 font-mono">v3.1</span>
       </div>
     </div>
   );
