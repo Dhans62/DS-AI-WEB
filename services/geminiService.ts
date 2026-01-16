@@ -52,7 +52,7 @@ export async function chatWithAgent(
   onToolCall: (name: string, args: any) => Promise<any>,
   isConfirmed: boolean = false,
   overrideApiKey?: string,
-  modelName: string = 'gemini-3-flash-preview', // Default sesuai permintaan
+  modelName: string = 'gemini-3-flash-preview',
   imageData?: { data: string; mimeType: string }
 ): Promise<AgentResponse> {
   
@@ -64,17 +64,28 @@ export async function chatWithAgent(
 
   const ai = new GoogleGenAI({ apiKey });
 
-  // Validasi Model Wajib
   const allowedModels = ['gemini-3-flash-preview', 'gemini-2.5-flash'];
   const activeModel = allowedModels.includes(modelName) ? modelName : 'gemini-3-flash-preview';
 
+  // --- OPTIMASI IDENTITAS (FORCE AGENT MODE) ---
+  const enhancedInstruction = `
+    IDENTITAS: Kamu adalah DS-AI AGENT CORE, sebuah AI IDE yang berjalan di Android Native.
+    LINGKUNGAN: Kamu bekerja di filesystem lokal pada direktori 'root'. 
+    OTORITAS: Kamu BUKAN chatbot sandbox. Kamu punya akses nyata ke file melalui TOOLS yang disediakan.
+    ATURAN KRUSIAL:
+    1. Jika user bertanya tentang file atau folder, Kamu WAJIB memanggil 'listDirectory' atau 'readFile'. Jangan berasumsi!
+    2. Jangan pernah mengatakan kamu tidak punya akses atau berada di lingkungan terbatas.
+    3. Gunakan 'listDirectory' secara proaktif untuk memahami struktur project.
+    
+    INTRUKSI TAMBAHAN: ${systemInstruction}
+  `.trim();
+
   const modelParams: any = {
     model: activeModel,
-    systemInstruction: systemInstruction + "\n\nSelalu jelaskan alasanmu sebelum memanggil tool.",
+    systemInstruction: enhancedInstruction,
     tools: [{ functionDeclarations: fileTools }],
   };
 
-  // Thinking config khusus model 3.0 untuk kedalaman analisa
   if (activeModel.includes('gemini-3')) {
     modelParams.thinkingConfig = { thinkingLevel: 'HIGH' };
   }
@@ -86,7 +97,6 @@ export async function chatWithAgent(
     parts: typeof msg.content === 'string' ? [{ text: msg.content }] : msg.content
   }));
 
-  // Masukkan data gambar jika ada (Vision Support)
   if (imageData && contents.length > 0) {
     const lastMsg = contents[contents.length - 1];
     if (lastMsg.role === 'user') {
@@ -113,18 +123,16 @@ export async function chatWithAgent(
     
     const functionCalls = candidate.content?.parts?.filter(p => p.functionCall).map(p => p.functionCall);
 
-    // LOGIKA TOOL CALLING
     if (functionCalls && functionCalls.length > 0) {
       if (!isConfirmed) {
         return {
-          text: text || "Saya telah menyiapkan rencana eksekusi file:",
+          text: text || "Saya perlu melakukan aksi pada file:",
           thought: thought,
           pendingActions: functionCalls as any,
           needsConfirmation: true
         };
       }
 
-      // Eksekusi tool satu per satu
       const toolResults = [];
       for (const fc of functionCalls) {
         if (!fc) continue;
@@ -137,7 +145,6 @@ export async function chatWithAgent(
         });
       }
 
-      // Kirim balik ke model 3.0/2.5 sebagai "user" role dengan functionResponse
       const nextResponse = await ai.models.generateContent({
         ...modelParams,
         contents: [
@@ -148,17 +155,13 @@ export async function chatWithAgent(
       });
 
       return {
-        text: nextResponse.text || "Proses selesai.",
+        text: nextResponse.text || "Eksekusi selesai.",
         thought: (nextResponse.candidates?.[0] as any)?.thought || "",
         needsConfirmation: false
       };
     }
 
-    return {
-      text: text,
-      thought: thought,
-      needsConfirmation: false
-    };
+    return { text, thought, needsConfirmation: false };
 
   } catch (error: any) {
     console.error(`Error on ${activeModel}:`, error);
@@ -171,7 +174,7 @@ export async function testGeminiConnection(apiKey: string, modelName: string = '
   try {
     await ai.models.generateContent({
       model: modelName,
-      contents: [{ role: 'user', parts: [{ text: 'Connection Test' }] }],
+      contents: [{ role: 'user', parts: [{ text: 'Ping!' }] }],
     });
     return { success: true, message: `Koneksi ${modelName} Aktif!` };
   } catch (error: any) {

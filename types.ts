@@ -32,16 +32,18 @@ export interface MessagePart {
 
 export interface Message {
   id: string;
-  projectId: string; // TAMBAHAN: Untuk memisahkan memori antar proyek
+  projectId: string; 
   role: 'user' | 'model' | 'system';
   content: string | MessagePart[];
-  thought?: string; // TAMBAHAN: Menangkap proses berpikir Gemini 3 (Thinking Mode)
+  thought?: string; 
+  // TAMBAHAN: Agar ChatPanel tahu pesan model ini punya aksi yang butuh izin
+  pendingActions?: PendingAction[]; 
   timestamp: number;
 }
 
 export interface AgentResponse {
   text: string;
-  thought?: string; // TAMBAHAN: Agar UI bisa menampilkan "Thinking..."
+  thought?: string; 
   needsConfirmation: boolean;
   pendingActions?: PendingAction[];
 }
@@ -55,3 +57,11 @@ export interface PendingAction {
 export type Theme = 'light' | 'dark';
 
 export type ActivePanel = 'explorer' | 'editor' | 'chat' | 'settings';
+
+// MODUL D: Log Entry untuk Console
+export interface LogEntry {
+  id: string;
+  message: string;
+  type: 'info' | 'warn' | 'error' | 'ai';
+  timestamp: number;
+}
