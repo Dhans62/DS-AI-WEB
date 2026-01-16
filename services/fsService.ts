@@ -9,28 +9,40 @@ export interface FileNode {
 }
 
 /**
+ * UTILITY INTERNAL: Membersihkan path dari AI
+ * Menghilangkan 'root/', leading slashes, dan merapikan double slashes.
+ * Ini memastikan perintah AI mendarat di Directory.Documents yang tepat.
+ */
+const sanitizePath = (path: string): string => {
+  return path
+    .replace(/^root\//i, '') // Hapus 'root/' di awal (case insensitive)
+    .replace(/^\/+/, '')     // Hapus / di awal string
+    .replace(/\/+/g, '/');    // Bersihkan // jadi /
+};
+
+/**
  * Scan folder proyek secara rekursif
- * Menghasilkan struktur tree untuk UI Sidebar & AI Context
  */
 export const scanDirectory = async (path: string): Promise<FileNode[]> => {
+  const cleanPath = sanitizePath(path);
   try {
     const result = await Filesystem.readdir({
-      path: path,
+      path: cleanPath,
       directory: Directory.Documents,
     });
 
     const nodes: FileNode[] = [];
 
     for (const file of result.files) {
-      // Membersihkan path agar tidak ada double slash //
-      const fullPath = `${path}/${file.name}`.replace(/\/+/g, '/');
+      // Konsistensi fullPath menggunakan path yang sudah bersih
+      const fullPath = `${cleanPath}/${file.name}`.replace(/\/+/g, '/');
       
       if (file.type === 'directory') {
         nodes.push({
           name: file.name,
           path: fullPath,
           type: 'folder',
-          children: await scanDirectory(fullPath) // Masuk ke dalam folder
+          children: await scanDirectory(fullPath)
         });
       } else {
         nodes.push({
@@ -51,8 +63,9 @@ export const scanDirectory = async (path: string): Promise<FileNode[]> => {
  * Membaca isi file secara native
  */
 export const readNativeFile = async (path: string): Promise<string> => {
+  const cleanPath = sanitizePath(path);
   const result = await Filesystem.readFile({
-    path: path,
+    path: cleanPath,
     directory: Directory.Documents,
     encoding: Encoding.UTF8,
   });
@@ -63,12 +76,13 @@ export const readNativeFile = async (path: string): Promise<string> => {
  * Menulis/Menyimpan file secara native
  */
 export const writeNativeFile = async (path: string, content: string): Promise<void> => {
+  const cleanPath = sanitizePath(path);
   await Filesystem.writeFile({
-    path: path,
+    path: cleanPath,
     data: content,
     directory: Directory.Documents,
     encoding: Encoding.UTF8,
-    recursive: true
+    recursive: true // Krusial agar AI bisa bikin folder otomatis
   });
 };
 
@@ -76,49 +90,49 @@ export const writeNativeFile = async (path: string, content: string): Promise<vo
  * Menghapus File atau Folder secara permanen
  */
 export const deleteNativeNode = async (path: string): Promise<void> => {
+  const cleanPath = sanitizePath(path);
   try {
     await Filesystem.deleteFile({
-      path: path,
+      path: cleanPath,
       directory: Directory.Documents,
     });
   } catch (e) {
-    // Jika gagal sebagai file, coba hapus sebagai direktori secara rekursif
     await Filesystem.rmdir({
-      path: path,
+      path: cleanPath,
       directory: Directory.Documents,
       recursive: true
     });
   }
 };
 
-/** * TAMBAHAN BARU: Membuat Node Baru (File atau Folder)
+/** * Membuat Node Baru (File atau Folder)
  */
 export const createNativeNode = async (path: string, type: 'file' | 'folder'): Promise<void> => {
+  const cleanPath = sanitizePath(path);
   if (type === 'folder') {
     await Filesystem.mkdir({
-      path: path,
+      path: cleanPath,
       directory: Directory.Documents,
       recursive: true
     });
   } else {
-    // Buat file kosong
-    await writeNativeFile(path, "");
+    await writeNativeFile(cleanPath, "");
   }
 };
 
 /**
- * TAMBAHAN BARU: Mengganti Nama File atau Folder
+ * Mengganti Nama File atau Folder
  */
 export const renameNativeNode = async (oldPath: string, newName: string): Promise<void> => {
-  // Ambil direktori induk dari path lama
-  const pathParts = oldPath.split('/');
-  pathParts.pop(); // Buang nama lama
+  const cleanOldPath = sanitizePath(oldPath);
+  const pathParts = cleanOldPath.split('/');
+  pathParts.pop(); 
   const parentPath = pathParts.join('/');
-  const newPath = `${parentPath}/${newName}`.replace(/\/+/g, '/');
+  const cleanNewPath = `${parentPath}/${newName}`.replace(/\/+/g, '/');
 
   await Filesystem.rename({
-    from: oldPath,
-    to: newPath,
+    from: cleanOldPath,
+    to: cleanNewPath,
     directory: Directory.Documents
   });
 };

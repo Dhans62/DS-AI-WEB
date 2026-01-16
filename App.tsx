@@ -31,6 +31,7 @@ export default function App(): React.JSX.Element {
   const [isProcessing, setIsProcessing] = useState(false);
   const [activeThought, setActiveThought] = useState<string>("");
   const [pendingToolCall, setPendingToolCall] = useState<{name: string, args: any, resolve: (val: any) => void} | null>(null);
+  const [lastImageData, setLastImageData] = useState<{ data: string, mimeType: string } | null>(null);
 
   // MODUL D: Logger Function
   const addLog = useCallback((message: string, type: LogEntry['type'] = 'info') => {
@@ -55,7 +56,12 @@ export default function App(): React.JSX.Element {
       if (t) setTheme(t as Theme);
       
       const tree = await scanDirectory('root');
-      setProjects([{ id: 'root', name: 'Main Workspace', createdAt: Date.now(), root: { name: 'root', path: 'root', type: 'folder', children: tree } }]);
+      setProjects([{ 
+        id: 'root', 
+        name: 'Main Workspace', 
+        createdAt: Date.now(), 
+        root: { name: 'root', path: 'root', type: 'folder', children: tree } 
+      }]);
       addLog("System initialized. Native FS Active.", "info");
     };
     init();
@@ -84,53 +90,65 @@ export default function App(): React.JSX.Element {
     }
   }, [activeFilePath]);
 
+  // Fungsi untuk merefresh explorer setelah aksi file
+  const refreshExplorer = async () => {
+    const tree = await scanDirectory('root');
+    setProjects(prev => [{
+      ...prev[0],
+      root: { ...prev[0].root, children: tree }
+    }]);
+  };
+
+  // 4. TOOL EXECUTION CORE
   const executeTool = async (name: string, args: any) => {
-    addLog(`Running ${name}...`, 'ai');
+    addLog(`Executing: ${name}`, 'ai');
     try {
       switch (name) {
         case 'writeFile':
           await writeNativeFile(args.path, args.content);
-          addLog(`Success write: ${args.path}`, 'info');
-          return `Success: File ${args.path} updated.`;
+          addLog(`File saved: ${args.path}`, 'info');
+          await refreshExplorer(); // Refresh sidebar otomatis
+          return `Success: File ${args.path} written.`;
         case 'readFile':
           const content = await readNativeFile(args.path);
-          addLog(`Success read: ${args.path}`, 'info');
+          addLog(`File read: ${args.path}`, 'info');
           return content;
         case 'deleteFile':
           await deleteNativeNode(args.path);
-          addLog(`Deleted: ${args.path}`, 'warn');
+          addLog(`Node deleted: ${args.path}`, 'warn');
+          await refreshExplorer();
           return `Success: ${args.path} deleted.`;
         default: 
           addLog(`Unknown tool: ${name}`, 'error');
           return "Error: Tool not found.";
       }
     } catch (e: any) {
-      addLog(`Tool Error: ${e.message}`, 'error');
+      addLog(`System Error: ${e.message}`, 'error');
       setIsConsoleOpen(true);
       return `Error: ${e.message}`;
     }
   };
 
   const handleToolCall = async (name: string, args: any) => {
+    // Read operations tidak butuh izin manual demi kecepatan
     if (name === 'readFile' || name === 'listDirectory') return await executeTool(name, args);
     return new Promise((resolve) => {
       setPendingToolCall({ name, args, resolve });
     });
   };
 
-  // --- LOGIKA MULTI-MODEL, MULTI-KEY & VISION ---
+  // 5. AI MESSAGE HANDLER
   const onSendMessage = async (text: string, imageData?: { data: string, mimeType: string }) => {
     if (isProcessing || (!text.trim() && !imageData)) return;
+    if (imageData) setLastImageData(imageData);
 
     const { value: rawKeys } = await Preferences.get({ key: 'gemini_api_key' });
     if (!rawKeys) {
         setActivePanel('settings');
         return alert("Input API Key di Settings.");
     }
-
     const apiKeys = rawKeys.split(',').map(k => k.trim()).filter(k => k !== "");
     
-    // User message object
     const userMsg: Message = { 
       id: Date.now().toString(), 
       projectId: activeProjectId, 
@@ -142,35 +160,23 @@ export default function App(): React.JSX.Element {
     const updatedMessages = [...messages, userMsg];
     setMessages(updatedMessages);
     setIsProcessing(true);
-    
-    if (imageData) addLog("Sending image for analysis...", "info");
-    addLog(`Initiating DS-AI Core...`, 'info');
+    addLog(`Initiating Agent Core...`, 'info');
 
     const availableModels = ['gemini-3-flash-preview', 'gemini-2.5-flash'];
     let success = false;
-    let finalError = "";
 
-    // OUTER LOOP: Iterasi Model
     for (const modelName of availableModels) {
       if (success) break;
-
-      // INNER LOOP: Iterasi API Keys
       for (let i = 0; i < apiKeys.length; i++) {
         try {
-          const currentKey = apiKeys[i];
-          addLog(`Requesting ${modelName} (Key #${i + 1})...`, 'ai');
-
-          const systemPrompt = `Kamu DS-AI, IDE Agent Berintegritas. Gunakan model ${modelName}. Fokus eksekusi file.`;
-          
-          // Kirim payload lengkap ke service
           const response = await chatWithAgent(
             updatedMessages, 
-            systemPrompt, 
+            `Kamu DS-AI, IDE Agent. Fokus eksekusi file. Gunakan model ${modelName}.`, 
             handleToolCall, 
-            false, 
-            currentKey, 
+            false, // Request confirmation first
+            apiKeys[i], 
             modelName,
-            imageData // PASSING DATA GAMBAR
+            imageData
           );
 
           const aiMsg: Message = { 
@@ -182,33 +188,14 @@ export default function App(): React.JSX.Element {
             timestamp: Date.now() 
           };
 
-          const finalMessages = [...updatedMessages, aiMsg];
-          setMessages(finalMessages);
-          await Preferences.set({ key: `chat_log_${activeProjectId}`, value: JSON.stringify(finalMessages) });
-          
+          setMessages(prev => [...prev, aiMsg]);
           success = true;
-          addLog(`Success with ${modelName}`, 'info');
           break; 
         } catch (err: any) {
-          finalError = err.message;
-          if (finalError.includes('429')) {
-            addLog(`Key #${i + 1} Limit for ${modelName}.`, 'warn');
-            continue; 
-          } else {
-            addLog(`Error: ${finalError}`, 'error');
-            break; 
-          }
+          addLog(`Model ${modelName} Key #${i+1} failed.`, 'warn');
         }
       }
-      
-      if (!success) addLog(`${modelName} failed on all keys. Falling back...`, 'warn');
     }
-
-    if (!success) {
-      setIsConsoleOpen(true);
-      alert(`SEMUA MODEL & KEY LIMIT: ${finalError}`);
-    }
-
     setIsProcessing(false);
   };
 
@@ -216,20 +203,56 @@ export default function App(): React.JSX.Element {
     if (!pendingToolCall) return;
     const { name, args, resolve } = pendingToolCall;
     setPendingToolCall(null);
-    if (!approved) addLog(`Denied: ${name}`, 'warn');
-    const result = approved ? await executeTool(name, args) : "Error: Denied by user.";
-    resolve(result);
+    
+    if (!approved) {
+      addLog(`Action Denied by User`, 'warn');
+      resolve("Error: User refused the action.");
+      return;
+    }
+
+    setIsProcessing(true);
+    const result = await executeTool(name, args);
+    resolve(result); // Teruskan hasil ke geminiService
+
+    // KRUSIAL: Beritahu AI bahwa tugas sukses agar dia bisa merespon balik
+    try {
+      const { value: rawKeys } = await Preferences.get({ key: 'gemini_api_key' });
+      const firstKey = rawKeys?.split(',')[0].trim() || "";
+      
+      const response = await chatWithAgent(
+        messages, 
+        "Tugas selesai. Berikan konfirmasi singkat.", 
+        handleToolCall, 
+        true, // bypass confirmation
+        firstKey,
+        'gemini-3-flash-preview',
+        lastImageData || undefined
+      );
+
+      if (response.text) {
+        setMessages(prev => [...prev, { 
+          id: Date.now().toString(), 
+          projectId: activeProjectId, 
+          role: 'model', 
+          content: response.text, 
+          timestamp: Date.now() 
+        }]);
+      }
+    } catch (e) {
+      addLog("Auto-confirm failed.", "error");
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
   return (
     <div className={`fixed inset-0 flex flex-col overflow-hidden pt-[var(--safe-area-top,20px)] ${theme === 'dark' ? 'bg-[#0d1117] text-gray-200' : 'bg-slate-50'}`}>
       
-      {/* SECURITY MODAL */}
       {pendingToolCall && (
         <div className="fixed inset-0 z-[200] flex items-center justify-center p-6 bg-black/80 backdrop-blur-md">
           <div className="w-full max-w-sm bg-[#161b22] border border-yellow-500/30 rounded-3xl p-8 shadow-2xl">
             <h3 className="font-black text-xl mb-4 text-yellow-500 text-center">🛡️ PERMISSION</h3>
-            <p className="text-sm opacity-80 mb-6 text-center">AI meminta izin: <span className="text-blue-400 font-mono underline">{pendingToolCall.name}</span></p>
+            <p className="text-sm opacity-80 mb-6 text-center">AI ingin melakukan: <span className="text-blue-400 font-mono underline">{pendingToolCall.name}</span></p>
             <div className="flex gap-4">
               <button onClick={() => handlePermission(false)} className="flex-1 py-4 rounded-2xl bg-white/5 font-bold">TOLAK</button>
               <button onClick={() => handlePermission(true)} className="flex-1 py-4 rounded-2xl bg-yellow-600 text-black font-black">IZINKAN</button>
@@ -238,7 +261,6 @@ export default function App(): React.JSX.Element {
         </div>
       )}
 
-      {/* MAIN VIEWPORT */}
       <div className="flex-1 flex overflow-hidden relative">
          {activePanel === 'explorer' && (
            <Sidebar 
@@ -255,33 +277,19 @@ export default function App(): React.JSX.Element {
               file={activeFilePath ? { path: activeFilePath, content: activeFileContent } : null} 
               onChange={handleEditorChange} 
               isConsoleOpen={isConsoleOpen}
-              toggleConsole={() => {
-                setIsConsoleOpen(!isConsoleOpen);
-                setHasNewLogs(false);
-              }}
+              toggleConsole={() => { setIsConsoleOpen(!isConsoleOpen); setHasNewLogs(false); }}
               hasNewLogs={hasNewLogs}
             />
-            <Console 
-              logs={logs} 
-              onClear={clearLogs} 
-              isOpen={isConsoleOpen} 
-            />
+            <Console logs={logs} onClear={clearLogs} isOpen={isConsoleOpen} />
          </div>
 
          <div className={`flex-1 ${activePanel === 'chat' ? 'flex' : 'hidden'}`}>
-            <ChatPanel 
-                theme={theme} 
-                messages={messages} 
-                onSendMessage={onSendMessage} 
-                isProcessing={isProcessing} 
-                activeThought={activeThought} 
-            />
+            <ChatPanel theme={theme} messages={messages} onSendMessage={onSendMessage} isProcessing={isProcessing} activeThought={activeThought} />
          </div>
 
          {activePanel === 'settings' && <Settings theme={theme} onClose={() => setActivePanel('editor')} />}
       </div>
 
-      {/* NAVIGATION BAR */}
       <div className="h-20 flex border-t border-[#30363d] bg-[#0d1117] px-4 pb-safe">
         <NavButton icon="📁" label="Files" active={activePanel === 'explorer'} onClick={() => setActivePanel('explorer')} />
         <NavButton icon="📝" label="Code" active={activePanel === 'editor'} onClick={() => setActivePanel('editor')} />
