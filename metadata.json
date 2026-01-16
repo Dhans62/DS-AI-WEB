@@ -1,0 +1,7 @@
+{
+  "name": "Copy of DS-AI Developer System",
+  "description": "An autonomous Agentic IDE that allows Gemini to manage files, write code, and assist in software development directly within a sandboxed environment.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
