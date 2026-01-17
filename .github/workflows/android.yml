@@ -18,7 +18,8 @@ jobs:
       - name: Install Dependencies
         run: |
           npm install
-          npm install @capacitor/cli @capacitor/core @capacitor/android
+          # Menambahkan filesystem plugin agar terpasang saat build di GitHub
+          npm install @capacitor/cli @capacitor/core @capacitor/android @capacitor/filesystem
 
       - name: Build Web Assets
         run: npm run build
@@ -29,8 +30,11 @@ jobs:
           distribution: 'zulu'
           java-version: '21'
 
-      - name: Sync Capacitor
-        run: npx cap sync
+      - name: Sync & Update Capacitor
+        run: |
+          # npx cap sync saja tidak cukup, butuh update untuk registrasi plugin native
+          npx cap update android
+          npx cap sync android
 
       - name: Build with Gradle
         run: |

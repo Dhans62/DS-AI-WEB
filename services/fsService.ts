@@ -9,15 +9,19 @@ export interface FileNode {
 }
 
 /**
- * UTILITY INTERNAL: Membersihkan path dari AI
- * Menghilangkan 'root/', leading slashes, dan merapikan double slashes.
- * Ini memastikan perintah AI mendarat di Directory.Documents yang tepat.
+ * UTILITY INTERNAL: Proteksi dan Standarisasi Path
+ * Memastikan semua operasi AI dipaksa masuk ke subfolder 'root' di Documents.
  */
 const sanitizePath = (path: string): string => {
-  return path
-    .replace(/^root\//i, '') // Hapus 'root/' di awal (case insensitive)
-    .replace(/^\/+/, '')     // Hapus / di awal string
-    .replace(/\/+/g, '/');    // Bersihkan // jadi /
+  let clean = path
+    .replace(/\\/g, '/')       
+    .replace(/\/+/g, '/');      
+
+  if (!clean.toLowerCase().startsWith('root')) {
+    clean = 'root/' + clean;
+  }
+
+  return clean.replace(/^\/+/, '');
 };
 
 /**
@@ -34,7 +38,6 @@ export const scanDirectory = async (path: string): Promise<FileNode[]> => {
     const nodes: FileNode[] = [];
 
     for (const file of result.files) {
-      // Konsistensi fullPath menggunakan path yang sudah bersih
       const fullPath = `${cleanPath}/${file.name}`.replace(/\/+/g, '/');
       
       if (file.type === 'directory') {
@@ -74,15 +77,28 @@ export const readNativeFile = async (path: string): Promise<string> => {
 
 /**
  * Menulis/Menyimpan file secara native
+ * UPDATE: Menambahkan pengecekan folder root agar tidak error pada installasi baru.
  */
 export const writeNativeFile = async (path: string, content: string): Promise<void> => {
   const cleanPath = sanitizePath(path);
+  
+  // Pastikan folder root/ selalu tersedia di Documents HP
+  try {
+    await Filesystem.mkdir({
+      path: 'root',
+      directory: Directory.Documents,
+      recursive: true
+    });
+  } catch (e) {
+    // Folder sudah ada, lanjut
+  }
+
   await Filesystem.writeFile({
     path: cleanPath,
     data: content,
     directory: Directory.Documents,
     encoding: Encoding.UTF8,
-    recursive: true // Krusial agar AI bisa bikin folder otomatis
+    recursive: true 
   });
 };
 
@@ -105,7 +121,8 @@ export const deleteNativeNode = async (path: string): Promise<void> => {
   }
 };
 
-/** * Membuat Node Baru (File atau Folder)
+/**
+ * Membuat Node Baru (File atau Folder)
  */
 export const createNativeNode = async (path: string, type: 'file' | 'folder'): Promise<void> => {
   const cleanPath = sanitizePath(path);
@@ -116,6 +133,7 @@ export const createNativeNode = async (path: string, type: 'file' | 'folder'): P
       recursive: true
     });
   } else {
+    // Memanggil writeNativeFile yang sudah memiliki pengecekan root
     await writeNativeFile(cleanPath, "");
   }
 };
