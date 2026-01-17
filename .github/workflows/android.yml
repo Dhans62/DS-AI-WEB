@@ -13,13 +13,13 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 20 # Menggunakan LTS terbaru agar lebih stabil
 
       - name: Install Dependencies
         run: |
           npm install
-          # Menambahkan filesystem plugin agar terpasang saat build di GitHub
-          npm install @capacitor/cli @capacitor/core @capacitor/android @capacitor/filesystem
+          # Memastikan plugin filesystem versi terbaru ikut terinstall
+          npm install @capacitor/cli@latest @capacitor/core@latest @capacitor/android@latest @capacitor/filesystem@latest
 
       - name: Build Web Assets
         run: npm run build
@@ -28,17 +28,17 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
-          java-version: '21'
+          java-version: '21' # Kembali ke versi 21 sesuai permintaan lu
 
-      - name: Sync & Update Capacitor
+      - name: Capacitor Sync
         run: |
-          # npx cap sync saja tidak cukup, butuh update untuk registrasi plugin native
-          npx cap update android
+          # Kita pakai sync android langsung, ini otomatis melakukan update & copy
           npx cap sync android
 
       - name: Build with Gradle
         run: |
           cd android
+          # Perintah ini akan otomatis membuat folder assets yang hilang tadi
           chmod +x gradlew
           ./gradlew assembleDebug
 
