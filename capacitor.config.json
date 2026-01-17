@@ -1,7 +1,0 @@
-{
-  "appId": "com.dsai.app",
-  "appName": "DS-AI",
-  "webDir": "dist",
-  "bundledWebRuntime": false
-}
-

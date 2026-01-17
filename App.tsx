@@ -8,6 +8,7 @@ import Console from './components/Console';
 import { chatWithAgent } from './services/geminiService';
 import { scanDirectory, readNativeFile, writeNativeFile, deleteNativeNode } from './services/fsService';
 import { Preferences } from '@capacitor/preferences';
+import { Filesystem } from '@capacitor/filesystem'; // Tambahkan ini jika belum ada
 
 export default function App(): React.JSX.Element {
   const [theme, setTheme] = useState<Theme>('dark');
@@ -81,6 +82,21 @@ export default function App(): React.JSX.Element {
     init();
   }, [activeProjectId, addLog]);
 
+   // --- TAMBAHKAN INI (1.5 ANDROID PERMISSION) ---
+  useEffect(() => {
+    const checkAndroidPermissions = async () => {
+      try {
+        const status = await Filesystem.checkPermissions();
+        if (status.publicStorage !== 'granted') {
+          await Filesystem.requestPermissions();
+        }
+      } catch (err) {
+        addLog("Gagal sinkronisasi izin sistem.", "error");
+      }
+    };
+    checkAndroidPermissions();
+  }, [addLog]);
+
   // 2. FILE CONTENT SYNC (Guard terhadap file yang dihapus)
   useEffect(() => {
     let isMounted = true;
@@ -109,7 +125,7 @@ export default function App(): React.JSX.Element {
     }
   }, [activeFilePath]);
 
-  // 4. TOOL EXECUTION CORE (Keamanan & Normalisasi Path)
+      // 4. TOOL EXECUTION CORE (Keamanan, Normalisasi Path & Android Permission Guard)
   const executeTool = async (name: string, args: any) => {
     // Normalisasi path agar AI tidak bingung antara 'ds/tes.txt' dan 'root/ds/tes.txt'
     let finalPath = args.path;
@@ -124,41 +140,72 @@ export default function App(): React.JSX.Element {
     }
 
     addLog(`Executing: ${name} on ${finalPath}`, 'ai');
+    
     try {
       let result = "";
       switch (name) {
         case 'writeFile':
-          await writeNativeFile(finalPath, args.content);
-          addLog(`File saved: ${finalPath}`, 'info');
-          result = `Success: File ${finalPath} written.`;
+          try {
+            await writeNativeFile(finalPath, args.content);
+            addLog(`File saved: ${finalPath}`, 'info');
+            result = `Success: File ${finalPath} written.`;
+          } catch (e: any) {
+            // Memberikan feedback spesifik ke AI jika terkena blokade Android
+            result = `Error: Gagal menulis. Sistem Android menolak akses (EACCES). Pastikan izin 'Allow management of all files' aktif di Settings HP. Detail: ${e.message}`;
+            addLog(`Write Failed: ${e.message}`, 'error');
+          }
           break;
+
         case 'readFile':
-          result = await readNativeFile(finalPath);
-          addLog(`File read: ${finalPath}`, 'info');
+          try {
+            result = await readNativeFile(finalPath);
+            addLog(`File read: ${finalPath}`, 'info');
+          } catch (e: any) {
+            result = `Error: Gagal membaca file. Izin akses ditolak sistem (EACCES). Detail: ${e.message}`;
+            addLog(`Read Failed: ${e.message}`, 'error');
+          }
           break;
+
         case 'deleteFile':
-          await deleteNativeNode(finalPath);
-          addLog(`Node deleted: ${finalPath}`, 'warn');
-          result = `Success: ${finalPath} deleted.`;
+          try {
+            await deleteNativeNode(finalPath);
+            addLog(`Node deleted: ${finalPath}`, 'warn');
+            result = `Success: ${finalPath} deleted.`;
+          } catch (e: any) {
+            result = `Error: Gagal menghapus. Sistem memblokir aksi. Detail: ${e.message}`;
+            addLog(`Delete Failed: ${e.message}`, 'error');
+          }
           break;
+
         case 'listDirectory':
-          const nodes = await scanDirectory(finalPath || 'root');
-          result = JSON.stringify(nodes);
+          try {
+            const nodes = await scanDirectory(finalPath || 'root');
+            result = JSON.stringify(nodes);
+            addLog(`Directory listed: ${finalPath || 'root'}`, 'info');
+          } catch (e: any) {
+            result = `Error: Gagal melihat folder. Izin sistem diperlukan. Detail: ${e.message}`;
+            addLog(`Scan Failed: ${e.message}`, 'error');
+          }
           break;
+
         default: 
           addLog(`Unknown tool: ${name}`, 'error');
           return "Error: Tool not found.";
       }
+
+      // Refresh Explorer jika ada perubahan struktur
       if (['writeFile', 'deleteFile'].includes(name)) await refreshExplorer();
       return result;
+
     } catch (e: any) {
-      addLog(`System Error: ${e.message}`, 'error');
-      return `Error: ${e.message}`;
+      const fatalError = `System Error Fatal: ${e.message}`;
+      addLog(fatalError, 'error');
+      return fatalError;
     }
   };
 
-  const handleToolCall = async (name: string, args: any) => {
-    // Tool baca-saja otomatis dieksekusi, tool modifikasi butuh izin
+    const handleToolCall = async (name: string, args: any) => {
+    // Tool baca-saja otomatis dieksekusi, tool modifikasi butuh izin (Confirm Action)
     if (name === 'readFile' || name === 'listDirectory') return await executeTool(name, args);
     return new Promise((resolve) => {
       setPendingToolCall({ name, args, resolve });
