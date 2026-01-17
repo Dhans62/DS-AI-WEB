@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Project, Theme } from '../types';
+import { Project, Theme, FileNode } from '../types';
 import { 
-  FileNode, 
   scanDirectory, 
   deleteNativeNode, 
   createNativeNode, 
@@ -19,7 +18,9 @@ interface SidebarProps {
   onDownload: () => void;
 }
 
-const Sidebar: React.FC<SidebarProps> = ({ theme, activeProjectId, activeFilePath, setActiveFilePath, onDownload }) => {
+const Sidebar: React.FC<SidebarProps> = ({ 
+  theme, activeProjectId, activeFilePath, setActiveFilePath, onDownload 
+}) => {
   const isDark = theme === 'dark';
   const [tree, setTree] = useState<FileNode[]>([]);
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set(['root']));
@@ -32,28 +33,20 @@ const Sidebar: React.FC<SidebarProps> = ({ theme, activeProjectId, activeFilePat
   
   const timerRef = React.useRef<any>(null);
 
-  /**
-   * Mengambil struktur file terbaru dari Native FS
-   */
   const refreshTree = async () => {
     try {
       const nodes = await scanDirectory('root');
-      setTree(nodes);
+      setTree(nodes || []);
     } catch (e) {
       console.error("Sidebar Sync Error:", e);
+      setTree([]); // Fallback agar UI tidak freeze
     }
   };
 
-  /**
-   * SYNC HANDLER:
-   * 1. Refresh saat project berubah.
-   * 2. Listen ke event 'refresh-fs' (dikirim oleh App.tsx saat AI selesai nulis file).
-   */
   useEffect(() => {
     refreshTree();
 
     const handleRefreshEvent = () => {
-      console.log("FS Event Received: Refreshing Sidebar...");
       refreshTree();
     };
 
@@ -86,10 +79,26 @@ const Sidebar: React.FC<SidebarProps> = ({ theme, activeProjectId, activeFilePat
   };
 
   const handleDelete = async () => {
-    if (activeNode && confirm(`Hapus permanen ${activeNode.name}?`)) {
-      await deleteNativeNode(activeNode.path);
-      setShowSheet(false);
-      refreshTree();
+    if (!activeNode) return;
+    
+    const confirmMsg = activeNode.type === 'folder' 
+      ? `Hapus folder '${activeNode.name}' dan isinya secara permanen?` 
+      : `Hapus file '${activeNode.name}'?`;
+
+    if (confirm(confirmMsg)) {
+      try {
+        await deleteNativeNode(activeNode.path);
+        
+        // INTEGRITAS: Jika file yang dihapus sedang dibuka di editor, tutup editornya
+        if (activeFilePath === activeNode.path || activeFilePath?.startsWith(activeNode.path + '/')) {
+          setActiveFilePath(null);
+        }
+        
+        setShowSheet(false);
+        refreshTree();
+      } catch (e: any) {
+        alert("Gagal menghapus: " + e.message);
+      }
     }
   };
 
@@ -99,6 +108,11 @@ const Sidebar: React.FC<SidebarProps> = ({ theme, activeProjectId, activeFilePat
     try {
       if (dialog.type === 'rename') {
         await renameNativeNode(activeNode.path, dialog.val);
+        // Update path editor jika file yang di-rename sedang terbuka
+        if (activeFilePath === activeNode.path) {
+          const newPath = activeNode.path.replace(/[^\/]+$/, dialog.val);
+          setActiveFilePath(newPath);
+        }
       } else {
         const type = dialog.type === 'newFile' ? 'file' : 'folder';
         const newPath = `${activeNode.path}/${dialog.val}`.replace(/\/+/g, '/');
@@ -171,24 +185,28 @@ const Sidebar: React.FC<SidebarProps> = ({ theme, activeProjectId, activeFilePat
         <div className="px-6 py-2 mb-2">
           <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Active Workspace</span>
         </div>
-        {renderTree(tree)}
+        {tree.length === 0 ? (
+          <div className="px-6 py-4 opacity-30 text-[10px] italic">No files found...</div>
+        ) : renderTree(tree)}
       </div>
 
       {dialog.show && (
         <div className="fixed inset-0 z-[110] flex items-center justify-center p-6 bg-black/80 backdrop-blur-md">
-          <div className="w-full max-w-xs bg-[#161b22] border border-[#30363d] rounded-2xl p-6 shadow-2xl animate-in zoom-in-95">
-            <h4 className="text-xs font-bold text-blue-500 uppercase mb-4">{dialog.type.replace(/([A-Z])/g, ' $1')}</h4>
+          <div className="w-full max-w-xs bg-[#161b22] border border-[#30363d] rounded-2xl p-6 shadow-2xl">
+            <h4 className="text-[10px] font-black text-blue-500 uppercase mb-4 tracking-tighter">
+              {dialog.type.replace(/([A-Z])/g, ' $1')}
+            </h4>
             <input 
               autoFocus
-              className="w-full bg-[#0d1117] border border-[#30363d] rounded-lg p-3 text-sm outline-none focus:border-blue-500 mb-4"
+              className="w-full bg-[#0d1117] border border-[#30363d] rounded-lg p-3 text-sm outline-none focus:border-blue-500 mb-4 text-white"
               value={dialog.val}
               onChange={(e) => setDialog({...dialog, val: e.target.value})}
               placeholder="Enter name..."
               onKeyDown={(e) => e.key === 'Enter' && handleActionSubmit()}
             />
             <div className="flex gap-2">
-              <button onClick={() => setDialog({...dialog, show: false})} className="flex-1 py-2 text-xs font-bold opacity-50">Cancel</button>
-              <button onClick={handleActionSubmit} className="flex-1 py-2 bg-blue-600 rounded-lg text-xs font-bold">Confirm</button>
+              <button onClick={() => setDialog({...dialog, show: false})} className="flex-1 py-2 text-xs font-bold text-gray-500">Cancel</button>
+              <button onClick={handleActionSubmit} className="flex-1 py-2 bg-blue-600 rounded-lg text-xs font-bold text-white">Confirm</button>
             </div>
           </div>
         </div>
@@ -197,7 +215,7 @@ const Sidebar: React.FC<SidebarProps> = ({ theme, activeProjectId, activeFilePat
       {showSheet && (
         <>
           <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[100]" onClick={() => setShowSheet(false)} />
-          <div className="fixed bottom-0 left-0 right-0 z-[101] bg-[#161b22] border-t border-[#30363d] rounded-t-[2.5rem] p-8">
+          <div className="fixed bottom-0 left-0 right-0 z-[101] bg-[#161b22] border-t border-[#30363d] rounded-t-[2rem] p-8 animate-in slide-in-from-bottom">
             <div className="w-12 h-1.5 bg-gray-700 rounded-full mx-auto mb-8" />
             <div className="mb-6">
               <p className="text-[10px] font-bold text-blue-500 uppercase mb-1">{activeNode?.type}</p>
@@ -206,18 +224,18 @@ const Sidebar: React.FC<SidebarProps> = ({ theme, activeProjectId, activeFilePat
             <div className="grid grid-cols-1 gap-2">
               {activeNode?.type === 'folder' && (
                 <>
-                  <button onClick={() => setDialog({show: true, type: 'newFile', val: ''})} className="w-full p-4 bg-[#21262d] rounded-2xl flex items-center gap-4 text-sm font-semibold">📄 New File</button>
-                  <button onClick={() => setDialog({show: true, type: 'newFolder', val: ''})} className="w-full p-4 bg-[#21262d] rounded-2xl flex items-center gap-4 text-sm font-semibold">📁 New Folder</button>
+                  <button onClick={() => setDialog({show: true, type: 'newFile', val: ''})} className="w-full p-4 bg-[#21262d] rounded-2xl flex items-center gap-4 text-sm font-semibold text-white">📄 New File</button>
+                  <button onClick={() => setDialog({show: true, type: 'newFolder', val: ''})} className="w-full p-4 bg-[#21262d] rounded-2xl flex items-center gap-4 text-sm font-semibold text-white">📁 New Folder</button>
                 </>
               )}
-              <button onClick={() => setDialog({show: true, type: 'rename', val: activeNode?.name || ''})} className="w-full p-4 bg-[#21262d] rounded-2xl flex items-center gap-4 text-sm font-semibold">✏️ Rename</button>
+              <button onClick={() => setDialog({show: true, type: 'rename', val: activeNode?.name || ''})} className="w-full p-4 bg-[#21262d] rounded-2xl flex items-center gap-4 text-sm font-semibold text-white">✏️ Rename</button>
               <button onClick={handleDelete} className="w-full p-4 bg-red-500/10 text-red-500 rounded-2xl flex items-center gap-4 text-sm font-semibold">🗑️ Delete</button>
             </div>
           </div>
         </>
       )}
 
-      <div className="p-4 border-t border-[#30363d] bg-[#0d1117] flex items-center justify-between">
+      <div className="p-4 border-t border-[#30363d] bg-[#0d1117] flex items-center justify-between shrink-0">
          <div className="flex items-center gap-2 px-2">
             <div className="w-2 h-2 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]"></div>
             <span className="text-[9px] text-gray-500 font-bold uppercase">Native FS Active</span>

@@ -15,11 +15,13 @@ const Settings: React.FC<SettingsProps> = ({ theme, onClose }) => {
   const [apiKey, setApiKey] = useState('');
   const [saveStatus, setSaveStatus] = useState(false);
   const [testStatus, setTestStatus] = useState<{msg: string, color: string} | null>(null);
+  
+  // Fitur Hapus Ingatan State
+  const [deleteConfirm, setDeleteConfirm] = useState(false);
 
   // LOAD KEY SAAT BUKA SETTINGS
   useEffect(() => {
     const loadKey = async () => {
-      // Prioritas: Preferences (Native), Fallback: localStorage (Web)
       const { value } = await Preferences.get({ key: 'gemini_api_key' });
       const savedKey = value || localStorage.getItem('DS_AI_API_KEY');
       if (savedKey) setApiKey(savedKey);
@@ -28,12 +30,29 @@ const Settings: React.FC<SettingsProps> = ({ theme, onClose }) => {
   }, []);
 
   const handleSave = async () => {
-    // SIMPAN KE KEDUA GUDANG AGAR AMAN (NATIVE + WEB)
     await Preferences.set({ key: 'gemini_api_key', value: apiKey });
     localStorage.setItem('DS_AI_API_KEY', apiKey);
-    
     setSaveStatus(true);
     setTimeout(() => setSaveStatus(false), 2000);
+  };
+
+  const handleClearMemory = async () => {
+    if (!deleteConfirm) {
+      setDeleteConfirm(true);
+      setTimeout(() => setDeleteConfirm(false), 3000); // Reset status jika tidak diklik lagi dalam 3 detik
+      return;
+    }
+
+    try {
+      // Hapus semua data dari Preferences (Native) dan LocalStorage (Web)
+      await Preferences.clear();
+      localStorage.clear();
+      
+      // Force reload untuk memastikan semua state di App.tsx ter-reset total
+      window.location.reload();
+    } catch (e: any) {
+      setTestStatus({ msg: `❌ Gagal menghapus: ${e.message}`, color: "text-red-500" });
+    }
   };
 
   const runTest = async () => {
@@ -42,16 +61,11 @@ const Settings: React.FC<SettingsProps> = ({ theme, onClose }) => {
       return;
     }
     setTestStatus({ msg: "⏳ Menghubungi Google AI Server...", color: "text-blue-400" });
-    
     const result = await testGeminiConnection(apiKey);
-    
     if (result.success) {
       setTestStatus({ msg: "✅ " + result.message, color: "text-green-500" });
     } else {
-      setTestStatus({ 
-        msg: `❌ FAILED: ${result.message}`, 
-        color: "text-red-500" 
-      });
+      setTestStatus({ msg: `❌ FAILED: ${result.message}`, color: "text-red-500" });
     }
   };
 
@@ -101,6 +115,24 @@ const Settings: React.FC<SettingsProps> = ({ theme, onClose }) => {
                 {testStatus.msg}
               </div>
             )}
+          </div>
+
+          {/* DANGER ZONE: Hapus Ingatan */}
+          <div className="pt-6 border-t border-[#30363d] space-y-3">
+            <h3 className="text-[10px] font-black uppercase text-red-500 tracking-widest">Danger Zone</h3>
+            <button 
+              onClick={handleClearMemory}
+              className={`w-full py-3 rounded-lg font-bold text-xs transition-all border ${
+                deleteConfirm 
+                ? 'bg-red-600 border-red-600 text-white animate-pulse' 
+                : 'bg-transparent border-red-900/50 text-red-500 hover:bg-red-500/10'
+              }`}
+            >
+              {deleteConfirm ? 'TAP LAGI UNTUK KONFIRMASI' : 'HAPUS SELURUH INGATAN AI'}
+            </button>
+            <p className="text-[9px] opacity-40 text-center italic">
+              Menghapus chat log, cache, dan API Key secara permanen.
+            </p>
           </div>
 
           <div className="pt-6 border-t border-[#30363d]">

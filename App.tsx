@@ -7,33 +7,27 @@ import Settings from './components/Settings';
 import Console from './components/Console';
 import { chatWithAgent } from './services/geminiService';
 import { scanDirectory, readNativeFile, writeNativeFile, deleteNativeNode } from './services/fsService';
-
-// NATIVE APK TOOLS
 import { Preferences } from '@capacitor/preferences';
 
 export default function App(): React.JSX.Element {
   const [theme, setTheme] = useState<Theme>('dark');
   const [activePanel, setActivePanel] = useState<ActivePanel>('editor');
   
-  // States Utama
   const [projects, setProjects] = useState<Project[]>([]);
   const [activeProjectId, setActiveProjectId] = useState('root');
   const [messages, setMessages] = useState<Message[]>([]);
   const [activeFilePath, setActiveFilePath] = useState<string | null>(null);
   const [activeFileContent, setActiveFileContent] = useState<string>("");
   
-  // Terminal States
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [isConsoleOpen, setIsConsoleOpen] = useState(false);
   const [hasNewLogs, setHasNewLogs] = useState(false);
 
-  // AI Processing States
   const [isProcessing, setIsProcessing] = useState(false);
   const [activeThought, setActiveThought] = useState<string>("");
   const [pendingToolCall, setPendingToolCall] = useState<{name: string, args: any, resolve: (val: any) => void} | null>(null);
   const [lastImageData, setLastImageData] = useState<{ data: string, mimeType: string } | null>(null);
 
-  // Logger Function
   const addLog = useCallback((message: string, type: LogEntry['type'] = 'info') => {
     setLogs(prev => [...prev, {
       id: Date.now().toString(),
@@ -44,7 +38,6 @@ export default function App(): React.JSX.Element {
     if (!isConsoleOpen) setHasNewLogs(true);
   }, [isConsoleOpen]);
 
-  // Global Sync Event
   const triggerFSRefresh = useCallback(() => {
     window.dispatchEvent(new CustomEvent('refresh-fs'));
     addLog("Filesystem Synchronized", "info");
@@ -55,7 +48,18 @@ export default function App(): React.JSX.Element {
     setHasNewLogs(false);
   };
 
-  // 1. INITIAL LOAD
+  const refreshExplorer = async () => {
+    const tree = await scanDirectory('root');
+    setProjects([{ 
+      id: 'root', 
+      name: 'Main Workspace', 
+      createdAt: Date.now(), 
+      root: { name: 'root', path: 'root', type: 'folder', children: tree || [] } 
+    }]);
+    triggerFSRefresh();
+  };
+
+  // 1. INITIAL LOAD (Sinkronisasi State & Storage)
   useEffect(() => {
     const init = async () => {
       const { value: t } = await Preferences.get({ key: 'ds-ai-theme' });
@@ -66,28 +70,37 @@ export default function App(): React.JSX.Element {
         id: 'root', 
         name: 'Main Workspace', 
         createdAt: Date.now(), 
-        root: { name: 'root', path: 'root', type: 'folder', children: tree } 
+        root: { name: 'root', path: 'root', type: 'folder', children: tree || [] } 
       }]);
+
+      const { value: savedMsgs } = await Preferences.get({ key: `chat_log_${activeProjectId}` });
+      setMessages(savedMsgs ? JSON.parse(savedMsgs) : []);
+
       addLog("System initialized. Native FS Active.", "info");
     };
     init();
-  }, [addLog]);
+  }, [activeProjectId, addLog]);
 
-  // 2. CHAT HISTORY SYNC
+  // 2. FILE CONTENT SYNC (Guard terhadap file yang dihapus)
   useEffect(() => {
-    const loadMessages = async () => {
-      const { value } = await Preferences.get({ key: `chat_log_${activeProjectId}` });
-      setMessages(value ? JSON.parse(value) : []);
-    };
-    loadMessages();
-  }, [activeProjectId]);
-
-  // 3. FILE CONTENT SYNC
-  useEffect(() => {
+    let isMounted = true;
     if (activeFilePath) {
-      readNativeFile(activeFilePath).then(setActiveFileContent);
+      readNativeFile(activeFilePath)
+        .then(content => {
+          if (isMounted) setActiveFileContent(content);
+        })
+        .catch(() => {
+          if (isMounted) {
+            setActiveFilePath(null);
+            setActiveFileContent("");
+            addLog(`File tidak ditemukan: ${activeFilePath}`, 'error');
+          }
+        });
+    } else {
+      setActiveFileContent("");
     }
-  }, [activeFilePath]);
+    return () => { isMounted = false; };
+  }, [activeFilePath, addLog]);
 
   const handleEditorChange = useCallback(async (content: string) => {
     if (activeFilePath) {
@@ -96,44 +109,47 @@ export default function App(): React.JSX.Element {
     }
   }, [activeFilePath]);
 
-  const refreshExplorer = async () => {
-    const tree = await scanDirectory('root');
-    setProjects(prev => [{
-      ...prev[0],
-      root: { ...prev[0].root, children: tree }
-    }]);
-    triggerFSRefresh();
-  };
-
-  // 4. TOOL EXECUTION CORE
+  // 4. TOOL EXECUTION CORE (Keamanan & Normalisasi Path)
   const executeTool = async (name: string, args: any) => {
-    addLog(`Executing: ${name}`, 'ai');
+    // Normalisasi path agar AI tidak bingung antara 'ds/tes.txt' dan 'root/ds/tes.txt'
+    let finalPath = args.path;
+    if (finalPath && !finalPath.startsWith('root')) {
+      finalPath = finalPath.startsWith('/') ? `root${finalPath}` : `root/${finalPath}`;
+    }
+
+    if (finalPath && !finalPath.startsWith('root')) {
+      const securityError = `Akses Ditolak: Path '${finalPath}' di luar root.`;
+      addLog(securityError, 'error');
+      return securityError;
+    }
+
+    addLog(`Executing: ${name} on ${finalPath}`, 'ai');
     try {
       let result = "";
       switch (name) {
         case 'writeFile':
-          await writeNativeFile(args.path, args.content);
-          addLog(`File saved: ${args.path}`, 'info');
-          result = `Success: File ${args.path} written.`;
+          await writeNativeFile(finalPath, args.content);
+          addLog(`File saved: ${finalPath}`, 'info');
+          result = `Success: File ${finalPath} written.`;
           break;
         case 'readFile':
-          result = await readNativeFile(args.path);
-          addLog(`File read: ${args.path}`, 'info');
+          result = await readNativeFile(finalPath);
+          addLog(`File read: ${finalPath}`, 'info');
           break;
         case 'deleteFile':
-          await deleteNativeNode(args.path);
-          addLog(`Node deleted: ${args.path}`, 'warn');
-          result = `Success: ${args.path} deleted.`;
+          await deleteNativeNode(finalPath);
+          addLog(`Node deleted: ${finalPath}`, 'warn');
+          result = `Success: ${finalPath} deleted.`;
           break;
         case 'listDirectory':
-          const nodes = await scanDirectory(args.path || 'root');
+          const nodes = await scanDirectory(finalPath || 'root');
           result = JSON.stringify(nodes);
           break;
         default: 
           addLog(`Unknown tool: ${name}`, 'error');
           return "Error: Tool not found.";
       }
-      if (['writeFile', 'deleteFile'].includes(name)) triggerFSRefresh();
+      if (['writeFile', 'deleteFile'].includes(name)) await refreshExplorer();
       return result;
     } catch (e: any) {
       addLog(`System Error: ${e.message}`, 'error');
@@ -142,14 +158,14 @@ export default function App(): React.JSX.Element {
   };
 
   const handleToolCall = async (name: string, args: any) => {
-    // Read operations tidak butuh izin manual
+    // Tool baca-saja otomatis dieksekusi, tool modifikasi butuh izin
     if (name === 'readFile' || name === 'listDirectory') return await executeTool(name, args);
     return new Promise((resolve) => {
       setPendingToolCall({ name, args, resolve });
     });
   };
 
-  // 5. AI MESSAGE HANDLER (INJEKSI IDENTITAS AGENT)
+  // 5. AI MESSAGE HANDLER (Disiplin Model 3.0 & 2.5)
   const onSendMessage = async (text: string, imageData?: { data: string, mimeType: string }) => {
     if (isProcessing || (!text.trim() && !imageData)) return;
     if (imageData) setLastImageData(imageData);
@@ -170,10 +186,9 @@ export default function App(): React.JSX.Element {
     setMessages(updatedMessages);
     setIsProcessing(true);
 
-    // INSTRUKSI AGRESIF: Menghapus mentalitas sandbox AI
-    const agentIdentity = `IDENTITAS: DS-AI AGENT CORE. LINGKUNGAN: Android Native. 
-    OTORITAS: Kamu punya akses filesystem nyata. JANGAN mengaku di sandbox. 
-    Jika tidak tahu isi folder, WAJIB panggil 'listDirectory' di path 'root'.`;
+    const currentFileContext = activeFilePath ? `User sedang membuka file: ${activeFilePath}` : "Belum ada file yang dibuka.";
+    const agentIdentity = `IDENTITAS: Senior Software Engineer. LINGKUNGAN: Android Native (root). KONTEKS: ${currentFileContext}
+ATURAN: 1. Berbicaralah seperti rekan kerja manusia. 2. Gunakan 'listDirectory' jika ragu. 3. Batasan: Jalur 'root/'. 4. Baca file sebelum edit.`;
 
     const availableModels = ['gemini-3-flash-preview', 'gemini-2.5-flash'];
     let success = false;
@@ -182,15 +197,8 @@ export default function App(): React.JSX.Element {
       if (success) break;
       for (const key of apiKeys) {
         try {
-          const response = await chatWithAgent(
-            updatedMessages, 
-            agentIdentity, 
-            handleToolCall, 
-            false, 
-            key, 
-            modelName,
-            imageData
-          );
+          // Pertama, panggil dengan isConfirmed = false
+          const response = await chatWithAgent(updatedMessages, agentIdentity, handleToolCall, false, key, modelName, imageData);
 
           const aiMsg: Message = { 
             id: (Date.now() + 1).toString(), 
@@ -198,7 +206,7 @@ export default function App(): React.JSX.Element {
             role: 'model', 
             content: response.text, 
             thought: response.thought,
-            pendingActions: response.pendingActions, // Kirim aksi ke ChatPanel
+            pendingActions: response.pendingActions,
             timestamp: Date.now() 
           };
 
@@ -208,26 +216,48 @@ export default function App(): React.JSX.Element {
           success = true;
           break; 
         } catch (err) {
-          addLog(`Model ${modelName} failed.`, 'warn');
+          addLog(`Model ${modelName} gagal: ${err}`, 'warn');
         }
       }
     }
     setIsProcessing(false);
   };
 
+  // 6. PERMISSION HANDLER (Re-Chat Trigger)
   const handlePermission = async (approved: boolean) => {
     if (!pendingToolCall) return;
     const { name, args, resolve } = pendingToolCall;
     setPendingToolCall(null);
     
     if (!approved) {
-      resolve("Error: User refused the action.");
+      addLog(`Tindakan ${name} ditolak.`, 'warn');
+      resolve("Error: User menolak akses.");
       return;
     }
 
     setIsProcessing(true);
     const result = await executeTool(name, args);
-    resolve(result); // Kembalikan ke agent loop
+    resolve(result); // Teruskan hasil ke tool call
+
+    // SETELAH TOOL SELESAI, MINTA AI MEMBERIKAN JAWABAN AKHIR
+    const { value: rawKeys } = await Preferences.get({ key: 'gemini_api_key' });
+    const key = rawKeys?.split(',')[0].trim();
+    if (key) {
+      try {
+        const response = await chatWithAgent(messages, "", handleToolCall, true, key, 'gemini-3-flash-preview');
+        const finalAiMsg: Message = {
+          id: Date.now().toString(),
+          projectId: activeProjectId,
+          role: 'model',
+          content: response.text,
+          timestamp: Date.now()
+        };
+        setMessages(prev => [...prev, finalAiMsg]);
+        await Preferences.set({ key: `chat_log_${activeProjectId}`, value: JSON.stringify([...messages, finalAiMsg]) });
+      } catch (e) {
+        addLog("Gagal memproses respon final AI.", "error");
+      }
+    }
     setIsProcessing(false);
   };
 
@@ -262,8 +292,8 @@ export default function App(): React.JSX.Element {
               onSendMessage={onSendMessage} 
               isProcessing={isProcessing} 
               activeThought={activeThought}
-              pendingToolCall={pendingToolCall} // Untuk izin di dalam chat
-              onAction={handlePermission}     // Callback tombol chat
+              pendingToolCall={pendingToolCall} 
+              onAction={handlePermission}
             />
          </div>
 
@@ -280,12 +310,33 @@ export default function App(): React.JSX.Element {
   );
 }
 
-function NavButton({ icon, label, active, onClick }: { icon: string, label: string, active: boolean, onClick: () => void }) {
+function NavButton({ 
+  icon, 
+  label, 
+  active, 
+  onClick 
+}: { 
+  icon: string, 
+  label: string, 
+  active: boolean, 
+  onClick: () => void 
+}) {
   return (
-    <button onClick={onClick} className={`flex flex-col items-center justify-center flex-1 gap-1 transition-all ${active ? 'text-blue-400 scale-110' : 'text-gray-500'}`}>
-      <span className="text-xl">{icon}</span>
-      <span className="text-[10px] font-bold uppercase tracking-widest">{label}</span>
-      {active && <div className="w-1 h-1 rounded-full bg-blue-400 mt-1 shadow-[0_0_8px_#60a5fa]" />}
+    <button 
+      onClick={onClick} 
+      className={`flex flex-col items-center justify-center flex-1 gap-1 transition-all duration-300 ${
+        active ? 'text-blue-400 scale-110' : 'text-gray-500 hover:text-gray-400'
+      }`}
+    >
+      <span className="text-xl" role="img" aria-label={label}>{icon}</span>
+      <span className="text-[10px] font-black uppercase tracking-[0.15em]">{label}</span>
+      
+      {/* Indikator Aktif dengan efek Glow */}
+      <div className={`transition-all duration-300 rounded-full ${
+        active 
+          ? 'w-1.5 h-1.5 bg-blue-400 mt-1 shadow-[0_0_10px_#60a5fa]' 
+          : 'w-0 h-0 mt-0 opacity-0'
+      }`} />
     </button>
   );
 }
