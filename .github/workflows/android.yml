@@ -13,7 +13,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20 # Menggunakan LTS terbaru agar lebih stabil
+          node-version: 22 # HARUS versi 22 sesuai pesan error fatal tadi
 
       - name: Install Dependencies
         run: |
@@ -28,17 +28,16 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
-          java-version: '21' # Kembali ke versi 21 sesuai permintaan lu
+          java-version: '21' # Sesuai keinginan lu yang sudah terbukti work
 
       - name: Capacitor Sync
         run: |
-          # Kita pakai sync android langsung, ini otomatis melakukan update & copy
+          # Sync langsung ke platform android agar folder assets dibuat otomatis
           npx cap sync android
 
       - name: Build with Gradle
         run: |
           cd android
-          # Perintah ini akan otomatis membuat folder assets yang hilang tadi
           chmod +x gradlew
           ./gradlew assembleDebug
 
